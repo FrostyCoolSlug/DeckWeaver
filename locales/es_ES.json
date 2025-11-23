@@ -21,10 +21,6 @@
     
     "ui.device.title": "Dispositivo",
     
-    "ui.mix_selection.title": "Selección de Mezcla",
-    "ui.mix_a.title": "Mezcla A",
-    "ui.mix_b.title": "Mezcla B",
-    
     "ui.custom_icon.title": "Icono Personalizado",
     "ui.custom_icon.subtitle": "Selecciona un archivo de icono personalizado o usa un icono de una biblioteca instalada",
     "ui.icon_library_name.title": "Nombre de Biblioteca de Iconos",

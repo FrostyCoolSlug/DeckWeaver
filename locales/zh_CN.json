@@ -21,10 +21,6 @@
     
     "ui.device.title": "设备",
     
-    "ui.mix_selection.title": "混音选择",
-    "ui.mix_a.title": "混音 A",
-    "ui.mix_b.title": "混音 B",
-    
     "ui.custom_icon.title": "自定义图标",
     "ui.custom_icon.subtitle": "选择自定义图标文件或使用已安装图标库中的图标",
     "ui.icon_library_name.title": "图标库名称",

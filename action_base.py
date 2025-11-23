@@ -27,11 +27,8 @@ class PipeWeaverAction(ActionBase):
         self.selected_device_id = None
         self.selected_device_name = None
         self.selected_device_type = None
-        self.selected_mixes = set(["A"])
-        self.selected_target_names = set()
-        self.mute_targets_checkboxes = {}
-        self.mute_all_checkbox = None
-        self.mute_targets_container = None
+        self.selected_mixes = set()
+        self.mute_configurations = []
         self.volume = 50
         self.volume_step = 5
         self._is_initializing = True
@@ -41,7 +38,6 @@ class PipeWeaverAction(ActionBase):
         self._current_meter_b = 0
         self._current_meter_target = 0
         self._meter_client = None
-
         
         self._load_settings()
         
@@ -90,15 +86,6 @@ class PipeWeaverAction(ActionBase):
         virtual_targets = devices.get("targets", {}).get("virtual_devices", [])
         physical_targets = devices.get("targets", {}).get("physical_devices", [])
         return virtual_targets + physical_targets
-    
-    def _get_selected_targets_list(self):
-        """Get selected targets list, preferring active checkboxes over persistent state"""
-        active_checkboxes = []
-        for target_name, checkbox in self.mute_targets_checkboxes.items():
-            if checkbox.get_active():
-                active_checkboxes.append(target_name)
-        
-        return active_checkboxes if active_checkboxes else list(self.selected_target_names)
     
     def _get_source_mix_states(self, selected_mixes):
         """Get mute states for selected mixes"""
@@ -167,8 +154,6 @@ class PipeWeaverAction(ActionBase):
         
         self._load_device_settings(settings)
         
-        self._load_target_and_mix_settings(settings)
-        
         self.volume_step = settings.get('volume_step', 5)
         self.icon_path_from_picker = settings.get("icon_path_from_picker", None)
     
@@ -198,11 +183,26 @@ class PipeWeaverAction(ActionBase):
             self._set_selected_device(self.devices[0], settings)
     
     def _set_selected_device(self, device, settings, saved_device_id=None):
-        """Set the selected device and update settings if needed"""
+        """Set the selected device and initialize ALL state from API"""
         self.selected_device_id = device['id']
         self.selected_device_name = device['name']
         self.selected_device_type = device['type']
         self._reset_meter_values()
+        
+        # Initialize ALL state from API
+        status_data = self._get_status_data()
+        if status_data and self.selected_device_type == "source":
+            device_data = self._get_device_by_id(self.selected_device_id, "source")
+            if device_data:
+                # Initialize mute configurations from API (2 mute configurations)
+                mute_targets = device_data.get("mute_states", {}).get("mute_targets", {})
+                self.mute_configurations = [
+                    mute_targets.get("TargetA", []),
+                    mute_targets.get("TargetB", [])
+                ]
+                
+                # Default to Mix A for volume control
+                self.selected_mixes = set(["A"])
         
         if saved_device_id != device['id']:
             settings['device_id'] = device['id']
@@ -214,14 +214,6 @@ class PipeWeaverAction(ActionBase):
         self._current_meter_a = 0
         self._current_meter_b = 0
         self._current_meter_target = 0
-    
-    def _load_target_and_mix_settings(self, settings):
-        """Load target names and mix selections"""
-        saved_target_names = settings.get('selected_target_names')
-        self.selected_target_names = set([t for t in saved_target_names if t]) if saved_target_names else set()
-        
-        saved_mixes = settings.get('selected_mixes', ['A'])
-        self.selected_mixes = set(saved_mixes) if saved_mixes else set(["A"])
     
     def get_config_rows(self):
         """Get configuration UI rows"""
@@ -261,41 +253,7 @@ class PipeWeaverAction(ActionBase):
         
         self.device_selector.connect("notify::selected-item", self.on_device_changed)
         
-        self.mix_header = Adw.PreferencesGroup()
-        self.mix_header.set_title(self.plugin_base.lm.get("ui.mix_selection.title"))
-        self.mix_header.set_description("Select mixes for source devices (A and/or B)")
-        self.mix_header.set_margin_top(12)
-        self.mix_header.set_margin_bottom(12)
-        
-        self.mix_listbox = Gtk.ListBox()
-        self.mix_listbox.set_selection_mode(Gtk.SelectionMode.NONE)
-        self.mix_listbox.add_css_class("boxed-list")
-        self.mix_header.add(self.mix_listbox)
-        
-        self.mix_a_checkbox = Gtk.CheckButton()
-        self.mix_a_checkbox.set_active("A" in self.selected_mixes)
-        self.mix_a_checkbox.connect("toggled", self._on_mix_checkbox_changed, "A")
-        
-        self.mix_b_checkbox = Gtk.CheckButton()
-        self.mix_b_checkbox.set_active("B" in self.selected_mixes)
-        self.mix_b_checkbox.connect("toggled", self._on_mix_checkbox_changed, "B")
-        
-        mix_a_row = Adw.ActionRow()
-        mix_a_row.set_title(self.plugin_base.lm.get("ui.mix_a.title"))
-        mix_a_row.add_suffix(self.mix_a_checkbox)
-        
-        mix_b_row = Adw.ActionRow()
-        mix_b_row.set_title(self.plugin_base.lm.get("ui.mix_b.title"))
-        mix_b_row.add_suffix(self.mix_b_checkbox)
-        
-        self.mix_listbox.append(mix_a_row)
-        self.mix_listbox.append(mix_b_row)
-        
-        self.mute_targets_model = Gtk.StringList()
-        self.mute_targets_checkboxes = {}
-        
-        self._update_mute_targets()
-        
+                
         icon_expander = Adw.ExpanderRow()
         icon_expander.set_title(self.plugin_base.lm.get("ui.custom_icon.title"))
         icon_expander.set_subtitle(self.plugin_base.lm.get("ui.custom_icon.subtitle"))
@@ -344,10 +302,6 @@ class PipeWeaverAction(ActionBase):
         
         config_rows = [self.device_selector]
 
-        if self.selected_device_type == "source":
-            config_rows.append(self.mix_header)
-            config_rows.append(self.mute_targets_container)
-
         config_rows.append(icon_expander)
         config_rows.append(self.volume_step_row)
         config_rows.append(refresh_btn)
@@ -368,8 +322,21 @@ class PipeWeaverAction(ActionBase):
             self.selected_device_name = device['name']
             self.selected_device_type = device['type']
             
+            status_data = self._get_status_data()
+            if status_data and self.selected_device_type == "source":
+                device_data = self._get_device_by_id(self.selected_device_id, "source")
+                if device_data:
+                    mute_targets = device_data.get("mute_states", {}).get("mute_targets", {})
+                    self.mute_configurations = [
+                        mute_targets.get("TargetA", []),
+                        mute_targets.get("TargetB", [])
+                    ]
+                    
+                    self.selected_mixes = set(["A"])
+            
             if hasattr(self, 'set_top_label'):
-                self.set_top_label(None)
+                device_name = self.selected_device_name[:25] if self.selected_device_name else "Unknown"
+                self.set_top_label(device_name, font_size=14)
             
             self.update_image()
     
@@ -395,9 +362,6 @@ class PipeWeaverAction(ActionBase):
         
         GLib.idle_add(self.update_image)
         
-        if hasattr(self, 'get_config_rows'):
-            self.on_settings_changed(settings)
-    
     def on_icon_picker_clicked(self, button, *args):
         """Handle icon picker button click - opens StreamController's asset manager"""
         try:
@@ -456,186 +420,6 @@ class PipeWeaverAction(ActionBase):
                 return None
         return None
     
-    def _update_mute_targets(self):
-        """Update mute targets based on current device selection"""
-        self.mute_targets_checkboxes.clear()
-        self.mute_all_checkbox = None
-        
-        if not hasattr(self, 'mute_targets_header') or self.mute_targets_header is None:
-            self.mute_targets_header = Adw.PreferencesGroup(title=self.plugin_base.lm.get("ui.mute_targets.title"))
-            self.mute_targets_header.set_description("Select targets to mute (for source devices)")
-            self.mute_targets_header.set_margin_top(12)
-            self.mute_targets_header.set_margin_bottom(12)
-            
-            self.mute_targets_listbox = Gtk.ListBox()
-            self.mute_targets_listbox.set_selection_mode(Gtk.SelectionMode.NONE)
-            self.mute_targets_listbox.add_css_class("boxed-list")
-            self.mute_targets_header.add(self.mute_targets_listbox)
-        
-        while True:
-            row = self.mute_targets_listbox.get_first_child()
-            if row is None:
-                break
-            self.mute_targets_listbox.remove(row)
-        
-        self.mute_targets_container = self.mute_targets_header
-        
-        if not self.selected_device_id or self.selected_device_type != "source":
-            na_row = Adw.ActionRow(title=self.plugin_base.lm.get("ui.na_target.title"))
-            self.mute_targets_listbox.append(na_row)
-            return
-        
-        try:
-            all_targets = self._get_all_targets()
-            
-            if all_targets:
-                self.mute_all_checkbox = Gtk.CheckButton()
-                all_selected = len(self.selected_target_names) == len(all_targets) and len(all_targets) > 0
-                no_targets_selected = len(self.selected_target_names) == 0
-                self.mute_all_checkbox.set_active(all_selected or no_targets_selected)
-                self.mute_all_checkbox.connect("toggled", self._on_mute_all_changed)
-                
-                mute_all_row = Adw.ActionRow()
-                mute_all_row.set_title(self.plugin_base.lm.get("ui.mute_to_all.title"))
-                mute_all_row.add_suffix(self.mute_all_checkbox)
-                
-                self.mute_targets_listbox.append(mute_all_row)
-                
-                for target in all_targets:
-                    target_name = target['description']['name']
-                    target_id = target['description']['id']
-                    
-                    checkbox = Gtk.CheckButton()
-                    is_selected = target_name in self.selected_target_names and len(self.selected_target_names) > 0
-                    checkbox.set_active(is_selected)
-                    
-                    checkbox.connect("toggled", self._on_target_checkbox_changed, target_name)
-                    
-                    target_row = Adw.ActionRow()
-                    target_row.set_title(target_name)
-                    target_row.add_suffix(checkbox)
-                    
-                    self.mute_targets_checkboxes[target_name] = checkbox
-                    
-                    self.mute_targets_listbox.append(target_row)
-                
-                if len(self.mute_targets_checkboxes) == 0:
-                    no_target_row = Adw.ActionRow(title=self.plugin_base.lm.get("ui.no_targets_available.title"))
-                    self.mute_targets_listbox.append(no_target_row)
-            else:
-                error_row = Adw.ActionRow(title=self.plugin_base.lm.get("ui.failed_get_status.title"))
-                self.mute_targets_listbox.append(error_row)
-                
-        except Exception as e:
-            log.error(f"Error updating mute targets: {e}")
-            error_row = Adw.ActionRow(title=self.plugin_base.lm.get("ui.error_loading_targets.title"))
-            self.mute_targets_listbox.append(error_row)
-    
-    def _find_target_id_by_name(self, target_name):
-        """Find target ID by name from the current device status"""
-        try:
-            all_targets = self._get_all_targets()
-            
-            for target in all_targets:
-                if target['description']['name'] == target_name:
-                    return target['description']['id']
-            
-            for target in all_targets:
-                if target['description']['name'].lower() == target_name.lower():
-                    return target['description']['id']
-                        
-        except Exception as e:
-            log.error(f"Error finding target ID for {target_name}: {e}")
-        
-        return None
-    
-    def _sync_mute_all_checkbox(self):
-        """Sync 'Mute to All' checkbox state based on current target selection"""
-        if not self.mute_all_checkbox:
-            return
-        
-        try:
-            all_targets = self._get_all_targets()
-            if not all_targets:
-                return
-            
-            total_targets = len(all_targets)
-            selected_count = len(self.selected_target_names)
-            
-            should_be_checked = selected_count == 0 or selected_count == total_targets
-            
-            self.mute_all_checkbox.handler_block_by_func(self._on_mute_all_changed)
-            self.mute_all_checkbox.set_active(should_be_checked)
-            self.mute_all_checkbox.handler_unblock_by_func(self._on_mute_all_changed)
-            
-            if selected_count == total_targets:
-                for cb in self.mute_targets_checkboxes.values():
-                    cb.handler_block_by_func(self._on_target_checkbox_changed)
-                    cb.set_active(False)
-                    cb.handler_unblock_by_func(self._on_target_checkbox_changed)
-                
-                self.selected_target_names.clear()
-                settings = self.get_settings()
-                settings['selected_target_names'] = list(self.selected_target_names)
-                self.set_settings(settings)
-                
-        except Exception as e:
-            log.error(f"Error syncing 'Mute to All' checkbox: {e}")
-    
-    def _on_target_checkbox_changed(self, checkbox, target_name):
-        """Handle checkbox state change"""
-        is_active = checkbox.get_active()
-        
-        if is_active:
-            self.selected_target_names.add(target_name)
-        else:
-            self.selected_target_names.discard(target_name)
-        
-        self._sync_mute_all_checkbox()
-        
-        settings = self.get_settings()
-        settings['selected_target_names'] = list(self.selected_target_names)
-        self.set_settings(settings)
-    
-    def _on_mute_all_changed(self, checkbox):
-        """Handle 'Mute to All' checkbox change"""
-        is_active = checkbox.get_active()
-        
-        if is_active:
-            for cb in self.mute_targets_checkboxes.values():
-                cb.handler_block_by_func(self._on_target_checkbox_changed)
-                cb.set_active(False)
-                cb.handler_unblock_by_func(self._on_target_checkbox_changed)
-            
-            self.selected_target_names.clear()
-        else:
-            checkbox.handler_block_by_func(self._on_mute_all_changed)
-            checkbox.set_active(True)
-            checkbox.handler_unblock_by_func(self._on_mute_all_changed)
-        
-        settings = self.get_settings()
-        settings['selected_target_names'] = list(self.selected_target_names)
-        self.set_settings(settings)
-    
-    def _on_mix_checkbox_changed(self, checkbox, mix_name):
-        """Handle mix checkbox state change"""
-        is_active = checkbox.get_active()
-        
-        if is_active:
-            self.selected_mixes.add(mix_name)
-        else:
-            if len(self.selected_mixes) == 1:
-                checkbox.handler_block_by_func(self._on_mix_checkbox_changed)
-                checkbox.set_active(True)
-                checkbox.handler_unblock_by_func(self._on_mix_checkbox_changed)
-                return
-            self.selected_mixes.discard(mix_name)
-        
-        settings = self.get_settings()
-        settings['selected_mixes'] = list(self.selected_mixes)
-        settings['selected_target_names'] = list(self.selected_target_names)
-        self.set_settings(settings)
-    
     def on_refresh_clicked(self, button):
         """Handle refresh button click"""
         try:
@@ -689,33 +473,6 @@ class PipeWeaverAction(ActionBase):
             self.device_selector.handler_unblock_by_func(self.on_device_changed)
             
             self.device_selector.queue_draw()
-            
-            current_target_selection = set()
-            for target_name, checkbox in self.mute_targets_checkboxes.items():
-                if checkbox.get_active():
-                    current_target_selection.add(target_name)
-            
-            self.selected_target_names = current_target_selection
-            
-            if hasattr(self, 'mix_a_checkbox') and self.mix_a_checkbox:
-                mix_a_active = self.mix_a_checkbox.get_active()
-                if mix_a_active:
-                    self.selected_mixes.add("A")
-                else:
-                    self.selected_mixes.discard("A")
-            if hasattr(self, 'mix_b_checkbox') and self.mix_b_checkbox:
-                mix_b_active = self.mix_b_checkbox.get_active()
-                if mix_b_active:
-                    self.selected_mixes.add("B")
-                else:
-                    self.selected_mixes.discard("B")
-            
-            settings = self.get_settings()
-            settings['selected_mixes'] = list(self.selected_mixes)
-            settings['selected_target_names'] = list(self.selected_target_names)
-            self.set_settings(settings)
-            
-            self._update_mute_targets()
             
         except Exception as e:
             log.error(f"PipeWeaverAction: Error refreshing devices: {e}")
@@ -816,15 +573,17 @@ class PipeWeaverAction(ActionBase):
             if self.selected_device_type == "source":
                 is_linked = self.client.is_volume_linked(self.selected_device_id)
                 
-                if is_linked:
-                    if "A" in self.selected_mixes and "B" in self.selected_mixes:
-                        self.client.set_volume(self.selected_device_id, volume, "B")
-                    elif "A" in self.selected_mixes:
-                        self.client.set_volume(self.selected_device_id, volume, "A")
-                    elif "B" in self.selected_mixes:
-                        self.client.set_volume(self.selected_device_id, volume, "B")
+                if is_linked and "A" in self.selected_mixes and "B" in self.selected_mixes:
+                    self.client.set_volume(self.selected_device_id, volume, "A")
                 else:
                     for mix in self.selected_mixes:
+                        current_volume = self._get_current_volume_for_mix(mix) or 0
+                        
+                        if current_volume >= 100 and volume >= current_volume:
+                            continue
+                        if current_volume <= 0 and volume <= current_volume:
+                            continue
+                            
                         self.client.set_volume(self.selected_device_id, volume, mix)
             else:
                 self.client.set_volume(self.selected_device_id, volume)
@@ -843,19 +602,22 @@ class PipeWeaverAction(ActionBase):
             if self.selected_device_type == "source":
                 is_linked = self.client.is_volume_linked(self.selected_device_id)
                 
-                if is_linked:
-                    if "A" in self.selected_mixes and "B" in self.selected_mixes:
-                        current_volume = self._get_current_volume_for_mix("B") or 0
-                        self.client.set_volume_relative(self.selected_device_id, delta, "B", current_volume)
-                    elif "A" in self.selected_mixes:
-                        current_volume = self._get_current_volume_for_mix("A") or 0
-                        self.client.set_volume_relative(self.selected_device_id, delta, "A", current_volume)
-                    elif "B" in self.selected_mixes:
-                        current_volume = self._get_current_volume_for_mix("B") or 0
-                        self.client.set_volume_relative(self.selected_device_id, delta, "B", current_volume)
+                if is_linked and "A" in self.selected_mixes and "B" in self.selected_mixes:
+                    current_volume = self._get_current_volume_for_mix("A") or 0
+                    
+                    if current_volume >= 100 and delta > 0:
+                        return
+                    
+                    self.client.set_volume_relative(self.selected_device_id, delta, "A", current_volume)
                 else:
                     for mix in self.selected_mixes:
                         current_volume = self._get_current_volume_for_mix(mix) or 0
+                        
+                        if current_volume >= 100 and delta > 0:
+                            continue
+                        if current_volume <= 0 and delta < 0:
+                            continue
+                            
                         self.client.set_volume_relative(self.selected_device_id, delta, mix, current_volume)
             else:
                 current_volume = self._get_current_volume_for_mix(None) or 0
@@ -883,13 +645,29 @@ class PipeWeaverAction(ActionBase):
                             volume_dict = volumes_dict.get("volume", {})
                             if isinstance(volume_dict, dict):
                                 vol_raw = volume_dict.get(mix, 0)
-                                return int((vol_raw / 255.0) * 100) if vol_raw > 100 else vol_raw
+                                volume = int((vol_raw / 255.0) * 100) if vol_raw > 100 else vol_raw
+                                step_size = getattr(self, 'volume_step', 5)
+                                volume = round(volume / step_size) * step_size
+                                if volume >= 99:
+                                    volume = 100
+                                elif volume <= 1:
+                                    volume = 0
+                                return volume
             else:
                 devices = status_data.get("audio", {}).get("profile", {}).get("devices", {})
                 for device in devices.get("targets", {}).get("virtual_devices", []):
                     if device["description"]["id"] == self.selected_device_id:
                         vol_raw = device.get("volume", 0)
-                        return int((vol_raw / 255.0) * 100) if vol_raw > 100 else vol_raw
+                        volume = int((vol_raw / 255.0) * 100) if vol_raw > 100 else vol_raw
+                        # Round to nearest step boundary for accurate visual representation
+                        step_size = getattr(self, 'volume_step', 5)
+                        volume = round(volume / step_size) * step_size
+                        # Clamp to ensure we reach 0 and 100 properly
+                        if volume >= 99:
+                            volume = 100
+                        elif volume <= 1:
+                            volume = 0
+                        return volume
         except Exception as e:
             log.error(f"Error getting current volume for mix {mix}: {e}")
         
@@ -943,7 +721,8 @@ class PipeWeaverAction(ActionBase):
         self.on_enable()
         
         if hasattr(self, 'set_top_label'):
-            self.set_top_label(None)
+            device_name = self.selected_device_name[:25] if self.selected_device_name else "Unknown"
+            self.set_top_label(device_name, font_size=14)
         
         self._start_meter_client()
     
@@ -1040,6 +819,10 @@ class PipeWeaverAction(ActionBase):
     
     def update_image(self):
         """Update button image - shows mute state or volume bars"""
+        if hasattr(self, 'set_top_label'):
+            device_name = self.selected_device_name[:25] if self.selected_device_name else "Unknown"
+            self.set_top_label(device_name, font_size=14)
+        
         if not hasattr(self, '_image_renderer'):
             self._image_renderer = ImageRenderer(self)
         self._image_renderer.render_image()

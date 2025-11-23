@@ -21,10 +21,6 @@
     
     "ui.device.title": "Périphérique",
     
-    "ui.mix_selection.title": "Sélection Mix",
-    "ui.mix_a.title": "Mix A",
-    "ui.mix_b.title": "Mix B",
-    
     "ui.custom_icon.title": "Icône Personnalisée",
     "ui.custom_icon.subtitle": "Sélectionnez un fichier d'icône personnalisé ou utilisez une icône d'une bibliothèque installée",
     "ui.icon_library_name.title": "Nom Bibliothèque Icônes",

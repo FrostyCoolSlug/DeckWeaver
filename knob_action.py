@@ -83,11 +83,8 @@ class PipeWeaverKnobAction(PipeWeaverAction):
             self._cycling_bus = False
     
     def _update_mixes(self, mixes):
-        """Update mix selections and save settings"""
+        """Update mix selections (runtime only)"""
         self.selected_mixes = set(mixes)
-        settings = self.get_settings()
-        settings["selected_mixes"] = mixes
-        self.set_settings(settings)
         self.update_image()
     
     def _toggle_menu(self):

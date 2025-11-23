@@ -1,6 +1,5 @@
 """Image rendering utilities for PipeWeaver actions"""
 import os
-import sys
 import traceback
 
 from PIL import Image, ImageDraw, ImageFont  # type: ignore
@@ -31,35 +30,20 @@ class ImageRenderer:
         is_linked = False
         
         try:
-            if self.action.selected_device_type == "source":
-                device_data = self.action._get_device_by_id(self.action.selected_device_id, "source")
-                if device_data:
+            device_data = self.action._get_device_by_id(self.action.selected_device_id, self.action.selected_device_type)
+            if device_data:
+                if self.action.selected_device_type == "source":
                     mute_states = device_data.get("mute_states", {}).get("mute_state", [])
-                    selected_mixes = list(self.action.selected_mixes)
-                    
-                    is_a_muted = "TargetA" in mute_states
-                    is_b_muted = "TargetB" in mute_states
-                    
-                    is_linked = False
-                    volumes_dict = device_data.get("volumes", {})
-                    if isinstance(volumes_dict, dict):
-                        volumes_linked = volumes_dict.get("volumes_linked")
-                        is_linked = volumes_linked is not None
-                    
-                    if is_linked:
-                        muted = is_b_muted
-                        is_a_selected = "A" in self.action.selected_mixes
-                        is_b_selected = "B" in self.action.selected_mixes
-                        if is_b_selected:
-                            is_a_muted = is_b_muted
-                    else:
-                        muted = any(f"Target{mix}" in mute_states for mix in selected_mixes)
-            else:
-                device_data = self.action._get_device_by_id(self.action.selected_device_id, "target")
-                if device_data:
+                    muted = "TargetA" in mute_states or "TargetB" in mute_states
+                else:
                     muted = device_data.get("mute_state") == "Muted"
-                    is_a_muted = muted
-                    is_b_muted = muted
+                
+                is_a_muted = muted
+                is_b_muted = muted
+            else:
+                muted = False
+                is_a_muted = False
+                is_b_muted = False
         except Exception as e:
             log.error(f"Error getting mute state: {e}")
             muted = False
@@ -110,6 +94,8 @@ class ImageRenderer:
         """Render image for source device with two volume bars"""
         if device_data:
             try:
+                device_colour = device_data.get("description", {}).get("colour", {})
+                                
                 volumes_dict = device_data.get("volumes", {})
                 if isinstance(volumes_dict, dict):
                     volume_dict = volumes_dict.get("volume", {})
@@ -135,8 +121,10 @@ class ImageRenderer:
             except Exception as vol_e:
                 log.error(f"Error accessing volume data: {vol_e}")
                 volumes = [0, 0]
+                device_colour = {}
         else:
             volumes = [0, 0]
+            device_colour = {}
         
         try:
             is_linked = False
@@ -153,10 +141,10 @@ class ImageRenderer:
             draw = ImageDraw.Draw(image)
             
             try:
-                font = self._load_monospace_font(34)
+                font = self._load_monospace_font(38)
             except:
                 try:
-                    font = self._load_monospace_font(34)
+                    font = self._load_monospace_font(38)
                 except:
                     font = ImageFont.load_default()
             
@@ -171,14 +159,11 @@ class ImageRenderer:
             bar_width = image_width - left_margin - right_margin
             bar_height = 24
             bar_spacing = 12
+            radius = 4
             start_x = left_margin
             bar_b_y = image_height - bar_height - edge_padding - 15
             bar_a_y = bar_b_y - bar_height - bar_spacing
             
-            device_name = self.action.selected_device_name[:25] if self.action.selected_device_name else "Unknown"
-            
-            draw.text((edge_padding, edge_padding), device_name, fill=(255, 255, 255, 255), font=font)
-
             try:
                 label_font = self._load_monospace_font(12)
             except:
@@ -193,7 +178,8 @@ class ImageRenderer:
             volume_b = volumes[1] if len(volumes) > 1 else 0
             
             if is_linked:
-                pass
+                self._draw_linked_volume_bars(draw, start_x, bar_a_y, bar_width, bar_height, radius,
+                                             volume_a, volume_b, is_a_muted, is_b_muted, device_colour)
             
             bar_a_fill_width = int((volume_a / 100.0) * bar_width)
             bar_b_fill_width = int((volume_b / 100.0) * bar_width)
@@ -228,9 +214,8 @@ class ImageRenderer:
                     image.paste(link_icon_resized, (icon_x, icon_y), link_icon_resized)
                 indicator_index += 1
 
-            self._draw_unlinked_bars(draw, start_x, bar_width, bar_a_y, bar_b_y, bar_height,
-                                    bar_a_fill_width, bar_b_fill_width, is_a_selected, is_b_selected, 
-                                    is_a_muted, is_b_muted)
+            self._draw_unlinked_volume_bars(draw, start_x, bar_a_y, bar_width, bar_height, radius,
+                                    volume_a, volume_b, is_a_muted, is_b_muted, device_colour)
 
             self._composite_icon(image, icon_left_x, icon_bottom_y, icon_max_size)
 
@@ -259,10 +244,10 @@ class ImageRenderer:
             draw = ImageDraw.Draw(image)
             
             try:
-                font = self._load_monospace_font(34)
+                font = self._load_monospace_font(38)
             except:
                 try:
-                    font = self._load_monospace_font(34)
+                    font = self._load_monospace_font(38)
                 except:
                     font = ImageFont.load_default()
             
@@ -282,10 +267,7 @@ class ImageRenderer:
             display_volume = volume
             bar_fill_width = int((display_volume / 100.0) * bar_width)
 
-            device_name = self.action.selected_device_name[:25] if self.action.selected_device_name else "Unknown"
             
-            draw.text((edge_padding, edge_padding), device_name, fill=(255, 255, 255, 255), font=font)
-
             try:
                 label_font = self._load_monospace_font(12)
             except:
@@ -315,7 +297,9 @@ class ImageRenderer:
                 fill_x2 = bar_x + min(bar_fill_width, bar_width - 2)
                 fill_y1 = bar_y + 2
                 fill_y2 = bar_y + bar_height - 2
-                if fill_x2 > fill_x1:
+                if fill_x2 > fill_x1 and not muted:
+                    self._draw_gradient_bar(draw, fill_x1, fill_y1, fill_x2, fill_y2, fill_color, 2)
+                elif fill_x2 > fill_x1:
                     self._draw_rounded_rect(draw, (fill_x1, fill_y1, fill_x2, fill_y2), max(0, radius - 2), fill_color)
             
             meter_value = self.action._current_meter_target
@@ -334,7 +318,20 @@ class ImageRenderer:
     def _draw_rounded_rect(self, draw, bbox, radius, fill):
         """Draw a rounded rectangle"""
         x1, y1, x2, y2 = bbox
+        
+        if x2 <= x1 or y2 <= y1:
+            return
+        
+        width = x2 - x1
+        height = y2 - y1
+        max_radius = min(width, height) // 2
+        radius = min(radius, max_radius)
+        
         if radius <= 0:
+            draw.rectangle(bbox, fill=fill)
+            return
+        
+        if x1 + radius >= x2 - radius or y1 + radius >= y2 - radius:
             draw.rectangle(bbox, fill=fill)
             return
         
@@ -371,50 +368,104 @@ class ImageRenderer:
                 draw.arc([x1 - offset, y2 - 2*radius - offset, x1 + 2*radius + offset, y2 + offset], 90, 180, fill=outline)
                 draw.arc([x2 - 2*radius - offset, y2 - 2*radius - offset, x2 + offset, y2 + offset], 0, 90, fill=outline)
     
-    def _draw_unlinked_bars(self, draw, start_x, bar_width, bar_a_y, bar_b_y, bar_height,
-                           bar_a_fill_width, bar_b_fill_width, is_a_selected, is_b_selected, 
-                           is_a_muted, is_b_muted):
+    def _draw_volume_bar(self, draw, x, y, width, height, volume, is_muted, device_colour=None, fallback_color=(102, 179, 255, 255)):
+        """Draw a single volume bar with gradient"""
+        draw.rectangle([x, y, x + width, y + height], fill=(30, 30, 30, 255))
+        draw.rectangle([x, y, x + width, y + height], outline=(60, 60, 60, 255), width=4)
+        
+        if volume > 0:
+            fill_width = int((volume / 100.0) * width)
+            fill_x = x + 4
+            fill_x2 = x + min(fill_width, width - 4)
+            fill_y = y + 4
+            fill_y2 = y + height - 4
+            
+            if fill_x2 > fill_x:
+                if is_muted:
+                    draw.rectangle([fill_x, fill_y, fill_x2, fill_y2], fill=(77, 77, 77, 255))
+                else:
+                    if device_colour:
+                        color = (device_colour['red'], device_colour['green'], device_colour['blue'], 255)
+                    else:
+                        color = fallback_color
+                    
+                    self._draw_gradient_bar(draw, fill_x, fill_y, fill_x2, fill_y2, color)
+    
+    def _draw_gradient_bar(self, draw, x1, y1, x2, y2, base_color, radius=4):
+        """Draw a gradient bar from base_color to darker shade"""
+        width = x2 - x1
+        height = y2 - y1
+        
+        if width <= 0 or height <= 0:
+            return
+        
+        darker_factor = 0.6
+        end_color = (
+            int(base_color[0] * darker_factor),
+            int(base_color[1] * darker_factor),
+            int(base_color[2] * darker_factor),
+            base_color[3]
+        )
+        
+        strips = max(1, width // 2)
+        for i in range(strips):
+            strip_x = x1 + (i * width // strips)
+            strip_width = max(1, (width // strips))
+            
+            strip_x2 = min(strip_x + strip_width, x2)
+            
+            if strip_x2 <= strip_x:
+                continue
+            
+            ratio = i / max(1, strips - 1)
+            strip_color = (
+                int(base_color[0] + (end_color[0] - base_color[0]) * ratio),
+                int(base_color[1] + (end_color[1] - base_color[1]) * ratio),
+                int(base_color[2] + (end_color[2] - base_color[2]) * ratio),
+                base_color[3]
+            )
+            
+            draw.rectangle([strip_x, y1, strip_x2, y2], fill=strip_color)
+    
+    def _draw_linked_volume_bars(self, draw, start_x, start_y, bar_width, bar_height, radius,
+                                   volume_a, volume_b, is_a_muted, is_b_muted, device_colour=None):
+        """Draw linked volume bars with device color"""
+        bar_spacing = 8
+        bar_a_y = start_y
+        bar_b_y = start_y + bar_height + bar_spacing
+        
+        # Draw Mix A bar
+        self._draw_volume_bar(draw, start_x, bar_a_y, bar_width, bar_height, 
+                             volume_a, is_a_muted, device_colour, (102, 179, 255, 255))
+        
+        # Draw Mix B bar  
+        self._draw_volume_bar(draw, start_x, bar_b_y, bar_width, bar_height,
+                             volume_b, is_b_muted, device_colour, (255, 77, 77, 255))
+        
+        # Draw meters
+        bar_a_fill_width = int((volume_a / 100.0) * bar_width)
+        bar_b_fill_width = int((volume_b / 100.0) * bar_width)
+        self._draw_unlinked_meters(draw, start_x, bar_width, bar_a_y, bar_b_y, bar_height,
+                                  bar_a_fill_width, bar_b_fill_width, radius)
+    
+    def _draw_unlinked_volume_bars(self, draw, start_x, start_y, bar_width, bar_height, radius,
+                                   volume_a, volume_b, is_a_muted, is_b_muted, device_colour=None):
         """Draw unlinked volume bars (two separate bars) with enhanced visibility"""
-        if is_a_muted:
-            bg_color_a = (38, 38, 38, 255)
-            outline_color_a = (102, 153, 255, 255) if is_a_selected else (77, 77, 77, 255)
-        else:
-            bg_color_a = (26, 26, 51, 255)
-            outline_color_a = (102, 153, 255, 255) if is_a_selected else (51, 77, 128, 255)
-
-        if is_b_muted:
-            bg_color_b = (38, 38, 38, 255)
-            outline_color_b = (255, 153, 51, 255) if is_b_selected else (77, 77, 77, 255)
-        else:
-            bg_color_b = (51, 26, 13, 255)
-            outline_color_b = (255, 153, 51, 255) if is_b_selected else (128, 77, 26, 255)
-
-        radius = bar_height // 2
-
-        draw.rectangle([start_x, bar_a_y, start_x + bar_width, bar_a_y + bar_height], fill=bg_color_a)
-        draw.rectangle([start_x, bar_a_y, start_x + bar_width, bar_a_y + bar_height], outline=outline_color_a, width=4)
-
-        if bar_a_fill_width > 0:
-            fill_color_a = (77, 77, 77, 255) if is_a_muted else (102, 179, 255, 255)
-            fill_x1 = start_x + 4
-            fill_x2 = start_x + min(bar_a_fill_width, bar_width - 4)
-            fill_y1 = bar_a_y + 4
-            fill_y2 = bar_a_y + bar_height - 4
-            if fill_x2 > fill_x1:
-                draw.rectangle([fill_x1, fill_y1, fill_x2, fill_y2], fill=fill_color_a)
-
-        draw.rectangle([start_x, bar_b_y, start_x + bar_width, bar_b_y + bar_height], fill=bg_color_b)
-        draw.rectangle([start_x, bar_b_y, start_x + bar_width, bar_b_y + bar_height], outline=outline_color_b, width=4)
-
-        if bar_b_fill_width > 0:
-            fill_color_b = (77, 77, 77, 255) if is_b_muted else (255, 179, 77, 255)
-            fill_x1 = start_x + 4
-            fill_x2 = start_x + min(bar_b_fill_width, bar_width - 4)
-            fill_y1 = bar_b_y + 4
-            fill_y2 = bar_b_y + bar_height - 4
-            if fill_x2 > fill_x1:
-                draw.rectangle([fill_x1, fill_y1, fill_x2, fill_y2], fill=fill_color_b)
-
+        bar_spacing = 8
+        bar_a_y = start_y
+        bar_b_y = start_y + bar_height + bar_spacing
+        
+        # Draw Mix A bar
+        self._draw_volume_bar(draw, start_x, bar_a_y, bar_width, bar_height, 
+                             volume_a, is_a_muted, device_colour, (102, 179, 255, 255))
+        
+        # Draw Mix B bar
+        self._draw_volume_bar(draw, start_x, bar_b_y, bar_width, bar_height,
+                             volume_b, is_b_muted, device_colour, (255, 77, 77, 255))
+        
+        # Draw meters
+        bar_a_fill_width = int((volume_a / 100.0) * bar_width)
+        bar_b_fill_width = int((volume_b / 100.0) * bar_width)
         self._draw_unlinked_meters(draw, start_x, bar_width, bar_a_y, bar_b_y, bar_height,
                                   bar_a_fill_width, bar_b_fill_width, radius)
     
@@ -583,13 +634,7 @@ class ImageRenderer:
     def _set_image_on_action(self, image, device_short):
         """Set the rendered image on the action"""
         try:
-            if hasattr(self.action, 'set_label'):
-                self.action.set_label(None)
-            if hasattr(self.action, 'set_bottom_label'):
-                self.action.set_bottom_label(None)
-            if hasattr(self.action, 'set_top_label'):
-                self.action.set_top_label(None)
-
+            image.load()
             self.action.set_media(image=image)
         except Exception as e:
             log.error(f"Error setting image: {e}")

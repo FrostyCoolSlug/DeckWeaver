@@ -21,10 +21,6 @@
     
     "ui.device.title": "Device",
     
-    "ui.mix_selection.title": "Mix Selection",
-    "ui.mix_a.title": "Mix A",
-    "ui.mix_b.title": "Mix B",
-    
     "ui.custom_icon.title": "Custom Icon",
     "ui.custom_icon.subtitle": "Select a custom icon file or use an icon from an installed icon library",
     "ui.icon_library_name.title": "Icon Library Name",
