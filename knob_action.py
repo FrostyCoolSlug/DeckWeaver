@@ -50,38 +50,6 @@ class PipeWeaverKnobAction(PipeWeaverAction):
         elif event_str == "Dial Short Up":
             self._toggle_mute()
     
-    def _cycle_bus_forward(self):
-        """Cycle bus selection forward: A -> B -> Both -> A"""
-        if self._cycling_bus or self.selected_device_type != "source":
-            return
-        
-        if self.selected_device_id and self.client.is_volume_linked(self.selected_device_id):
-            if "B" not in self.selected_mixes:
-                self._update_mixes(["B"])
-            return
-        
-        if self._have_different_mute_states():
-            self._update_mixes(["A"])
-            return
-        
-        self._cycling_bus = True
-        
-        try:
-            current_mixes = set(self.selected_mixes)
-            
-            if current_mixes == {"A"}:
-                new_mixes = ["B"]
-            elif current_mixes == {"B"}:
-                new_mixes = ["A", "B"] if not self._have_different_mute_states() else ["A"]
-            elif current_mixes == {"A", "B"}:
-                new_mixes = ["A"]
-            else:
-                new_mixes = ["A"]
-            
-            self._update_mixes(new_mixes)
-        finally:
-            self._cycling_bus = False
-    
     def _update_mixes(self, mixes):
         """Update mix selections (runtime only)"""
         self.selected_mixes = set(mixes)
@@ -182,9 +150,7 @@ class PipeWeaverKnobAction(PipeWeaverAction):
     def _execute_menu_action(self, action):
         """Execute the selected menu action"""
         try:
-            if action == "link":
-                self._toggle_volume_linking()
-            elif action == "unlink":
+            if action in ("link", "unlink"):
                 self._toggle_volume_linking()
             elif action == "bus_a":
                 self._toggle_bus_selection("A")

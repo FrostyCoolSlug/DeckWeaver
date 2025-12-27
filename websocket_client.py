@@ -7,6 +7,14 @@ from queue import Queue, Empty
 from loguru import logger as log  # type: ignore
 import websocket  # type: ignore
 
+_shared_pipeweaver_client = None
+_shared_pipeweaver_refcount = 0
+_shared_pipeweaver_lock = threading.Lock()
+
+_shared_meter_client = None
+_shared_meter_refcount = 0
+_shared_meter_lock = threading.Lock()
+
 def _decode_json_pointer_token(token):
     """Decode a single JSON Pointer token (~0, ~1 sequences)."""
     return token.replace("~1", "/").replace("~0", "~")
@@ -100,15 +108,34 @@ def apply_status_patch(status, patch):
 class MeterWebSocketClient:
     """WebSocket client for receiving meter data"""
 
-    def __init__(self, callback, port=14565):
+    def __init__(self, callback=None, port=14565):
         if websocket is None:
             raise ImportError("websocket-client library is required. Install it with: pip install websocket-client")
 
-        self.callback = callback
+        self._callbacks_lock = threading.Lock()
+        self._callbacks = set()
+        if callback is not None:
+            self._callbacks.add(callback)
         self.port = port
         self.ws = None
         self.running = False
         self.thread = None
+
+    def add_callback(self, callback):
+        if callback is None:
+            return
+        with self._callbacks_lock:
+            self._callbacks.add(callback)
+
+    def remove_callback(self, callback):
+        if callback is None:
+            return
+        with self._callbacks_lock:
+            self._callbacks.discard(callback)
+
+    def _get_callbacks_snapshot(self):
+        with self._callbacks_lock:
+            return list(self._callbacks)
 
     def _run(self):
         """Run WebSocket client in thread using websocket-client library"""
@@ -128,7 +155,12 @@ class MeterWebSocketClient:
                                 if 'id' in data and 'percent' in data:
                                     node_id = str(data['id'])
                                     percent = int(data['percent'])
-                                    self.callback(node_id, percent)
+                                    for cb in self._get_callbacks_snapshot():
+                                        try:
+                                            cb(node_id, percent)
+                                        except Exception as e:
+                                            log.error(f"Error in meter callback: {e}")
+                                            log.error(traceback.format_exc())
                                 else:
                                     log.warning(f"Meter message missing id or percent: {data}")
                             except json.JSONDecodeError as e:
@@ -178,6 +210,10 @@ class PipeWeaverWebSocketClient:
     def __init__(self, port=14565, patch_callback=None):
         self.port = port
         self.patch_callback = patch_callback
+        self._patch_callbacks_lock = threading.Lock()
+        self._patch_callbacks = set()
+        if patch_callback is not None:
+            self._patch_callbacks.add(patch_callback)
         self.ws = None
         self.running = False
         self.thread = None
@@ -186,14 +222,46 @@ class PipeWeaverWebSocketClient:
         self.message_queue = {}
         self.status = None
         self.connected = False
-    
-    def _send_command(self, request_data, timeout=5.0):
-        """Send a command and wait for response"""
-        max_wait = 5.0
+
+    def add_patch_callback(self, callback):
+        if callback is None:
+            return
+        with self._patch_callbacks_lock:
+            self._patch_callbacks.add(callback)
+    def remove_patch_callback(self, callback):
+        if callback is None:
+            return
+        with self._patch_callbacks_lock:
+            self._patch_callbacks.discard(callback)
+
+    def _get_patch_callbacks_snapshot(self):
+        callbacks = set()
+        with self._patch_callbacks_lock:
+            callbacks.update(self._patch_callbacks)
+        if self.patch_callback is not None:
+            callbacks.add(self.patch_callback)
+        return list(callbacks)
+
+    def _wait_for_connection(self, max_wait=5.0):
+        """Wait briefly for the WebSocket connection to become ready."""
         wait_time = 0.0
-        while not self.connected and wait_time < max_wait:
+        while not self.connected and wait_time < max_wait and self.running:
             time.sleep(0.1)
             wait_time += 0.1
+
+    def _is_pipewire_ok(self, response):
+        """Return True if a response represents a successful Pipewire command."""
+        return bool(
+            response
+            and isinstance(response, tuple)
+            and len(response) == 2
+            and response[0] == "Pipewire"
+            and response[1] in ["Ok", {"Ok": None}]
+        )
+
+    def _send_command(self, request_data, timeout=5.0):
+        """Send a command and wait for response"""
+        self._wait_for_connection(5.0)
         
         with self.lock:
             if not self.connected or not self.ws:
@@ -303,8 +371,13 @@ class PipeWeaverWebSocketClient:
             with self.lock:
                 apply_status_patch(self.status, patch)
 
-            if self.patch_callback:
-                self.patch_callback(self.status)
+            status_snapshot = self._get_status()
+            for cb in self._get_patch_callbacks_snapshot():
+                try:
+                    cb(status_snapshot)
+                except Exception as e:
+                    log.error(f"Error in patch callback: {e}")
+                    log.error(traceback.format_exc())
         except Exception as e:
             log.error(f"Error applying patch: {e}")
             log.error(traceback.format_exc())
@@ -394,18 +467,23 @@ class PipeWeaverWebSocketClient:
         with self.lock:
             return self.status
     
-    def get_devices(self):
-        """Get list of PipeWeaver devices"""
+    def _get_devices_tree(self):
+        """Return the devices subtree from the current status or {} if unavailable."""
         status = self._get_status()
         if not status:
+            return {}
+        profile = status.get("audio", {}).get("profile", {})
+        return profile.get("devices", {})
+    
+    def get_devices(self):
+        """Get list of PipeWeaver devices"""
+        devices_tree = self._get_devices_tree()
+        if not devices_tree:
             return []
-        
+
         devices = []
         try:
-            profile = status.get("audio", {}).get("profile", {})
-            devices_dict = profile.get("devices", {})
-            
-            sources = devices_dict.get("sources", {}).get("virtual_devices", [])
+            sources = devices_tree.get("sources", {}).get("virtual_devices", [])
             for device in sources:
                 devices.append({
                     "id": device["description"]["id"],
@@ -413,7 +491,7 @@ class PipeWeaverWebSocketClient:
                     "type": "source"
                 })
             
-            targets = devices_dict.get("targets", {}).get("virtual_devices", [])
+            targets = devices_tree.get("targets", {}).get("virtual_devices", [])
             for device in targets:
                 devices.append({
                     "id": device["description"]["id"],
@@ -427,18 +505,15 @@ class PipeWeaverWebSocketClient:
     
     def _get_device_type(self, device_id):
         """Get device type (source/target) for a given device ID"""
-        status = self._get_status()
-        if not status:
+        devices_tree = self._get_devices_tree()
+        if not devices_tree:
             return None
-        
-        profile = status.get("audio", {}).get("profile", {})
-        devices_dict = profile.get("devices", {})
-        
-        for device in devices_dict.get("sources", {}).get("virtual_devices", []):
+
+        for device in devices_tree.get("sources", {}).get("virtual_devices", []):
             if device["description"]["id"] == device_id:
                 return "source"
         
-        for device in devices_dict.get("targets", {}).get("virtual_devices", []):
+        for device in devices_tree.get("targets", {}).get("virtual_devices", []):
             if device["description"]["id"] == device_id:
                 return "target"
         
@@ -481,7 +556,7 @@ class PipeWeaverWebSocketClient:
         """Send a PipeWeaver command and return success status"""
         request = {"Pipewire": command}
         response = self._send_command(request)
-        return response and response[0] == "Pipewire" and response[1] in ["Ok", {"Ok": None}]
+        return self._is_pipewire_ok(response)
     
     def unmute_device(self, device_id, target=None):
         """Unmute a device"""
@@ -553,20 +628,15 @@ class PipeWeaverWebSocketClient:
         command = {"SetSourceVolumeLinked": [device_id, linked]}
         request = {"Pipewire": command}
         response = self._send_command(request)
-        
-        if response and response[0] == "Pipewire":
-            return response[1] in ["Ok", {"Ok": None}]
-        return False
+        return self._is_pipewire_ok(response)
     
         
     def is_volume_linked(self, device_id):
         """Check if volumes are linked for a source device"""
         try:
-            status = self._get_status()
-            if status:
-                profile = status.get("audio", {}).get("profile", {})
-                devices = profile.get("devices", {})
-                for device in devices.get("sources", {}).get("virtual_devices", []):
+            devices_tree = self._get_devices_tree()
+            if devices_tree:
+                for device in devices_tree.get("sources", {}).get("virtual_devices", []):
                     if device["description"]["id"] == device_id:
                         volumes = device.get("volumes", {})
                         volumes_linked = volumes.get("volumes_linked")
@@ -575,3 +645,83 @@ class PipeWeaverWebSocketClient:
             log.error(f"Error checking link status: {e}")
         
         return False
+
+
+def acquire_shared_pipeweaver_client(patch_callback=None, port=14565):
+    global _shared_pipeweaver_client
+    global _shared_pipeweaver_refcount
+
+    with _shared_pipeweaver_lock:
+        if _shared_pipeweaver_client is None:
+            _shared_pipeweaver_client = PipeWeaverWebSocketClient(port=port)
+            _shared_pipeweaver_client.start()
+
+        _shared_pipeweaver_refcount += 1
+
+        if patch_callback is not None:
+            _shared_pipeweaver_client.add_patch_callback(patch_callback)
+
+        return _shared_pipeweaver_client
+
+
+def release_shared_pipeweaver_client(patch_callback=None):
+    global _shared_pipeweaver_client
+    global _shared_pipeweaver_refcount
+
+    with _shared_pipeweaver_lock:
+        if _shared_pipeweaver_client is None:
+            return
+
+        if patch_callback is not None:
+            _shared_pipeweaver_client.remove_patch_callback(patch_callback)
+
+        if _shared_pipeweaver_refcount > 0:
+            _shared_pipeweaver_refcount -= 1
+
+        if _shared_pipeweaver_refcount <= 0:
+            try:
+                _shared_pipeweaver_client.stop()
+            except Exception:
+                pass
+            _shared_pipeweaver_client = None
+            _shared_pipeweaver_refcount = 0
+
+
+def acquire_shared_meter_client(callback=None, port=14565):
+    global _shared_meter_client
+    global _shared_meter_refcount
+
+    with _shared_meter_lock:
+        if _shared_meter_client is None:
+            _shared_meter_client = MeterWebSocketClient(port=port)
+            _shared_meter_client.start()
+
+        _shared_meter_refcount += 1
+
+        if callback is not None:
+            _shared_meter_client.add_callback(callback)
+
+        return _shared_meter_client
+
+
+def release_shared_meter_client(callback=None):
+    global _shared_meter_client
+    global _shared_meter_refcount
+
+    with _shared_meter_lock:
+        if _shared_meter_client is None:
+            return
+
+        if callback is not None:
+            _shared_meter_client.remove_callback(callback)
+
+        if _shared_meter_refcount > 0:
+            _shared_meter_refcount -= 1
+
+        if _shared_meter_refcount <= 0:
+            try:
+                _shared_meter_client.stop()
+            except Exception:
+                pass
+            _shared_meter_client = None
+            _shared_meter_refcount = 0

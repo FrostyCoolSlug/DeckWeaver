@@ -13,6 +13,7 @@ gi.require_version("Adw", "1")
 from gi.repository import Gtk, Adw
 
 from .knob_action import PipeWeaverKnobAction
+from .service_monitor import start_monitor, stop_monitor
 
 
 class DeckWeaver(PluginBase):
@@ -24,6 +25,9 @@ class DeckWeaver(PluginBase):
         self.load_and_apply_settings()
         self.load_devices()
         self.register_plugin()
+        
+        # Start the global PipeWeaver service monitor
+        start_monitor()
     
     def init_vars(self):
         """Initialize variables"""
@@ -116,10 +120,10 @@ class DeckWeaver(PluginBase):
             ("en_US", self.lm.get("settings.language.name.en_US")),
             ("es_ES", self.lm.get("settings.language.name.es_ES")),
             ("fr_FR", self.lm.get("settings.language.name.fr_FR")),
-            ("de_DE", self.lm.get("settings.language.name.de_DE"))
+            ("de_DE", self.lm.get("settings.language.name.de_DE")),
         ]
-        
-        language_names = [name for code, name in languages]
+
+        language_names = [name for _, name in languages]
         self.language_model = Gtk.StringList().new(language_names)
         self.language_dropdown = Adw.ComboRow(
             model=self.language_model,
@@ -149,11 +153,11 @@ class DeckWeaver(PluginBase):
             ("en_US", self.lm.get("settings.language.name.en_US")),
             ("es_ES", self.lm.get("settings.language.name.es_ES")),
             ("fr_FR", self.lm.get("settings.language.name.fr_FR")),
-            ("de_DE", self.lm.get("settings.language.name.de_DE"))
+            ("de_DE", self.lm.get("settings.language.name.de_DE")),
         ]
-        
+
         if selected_index < len(languages):
-            selected_code, selected_name = languages[selected_index]
+            selected_code, _ = languages[selected_index]
             
             settings = self.get_settings()
             settings["language"] = selected_code
@@ -167,4 +171,4 @@ class DeckWeaver(PluginBase):
     
     def on_disable(self):
         """Plugin disabled"""
-        pass
+        stop_monitor()

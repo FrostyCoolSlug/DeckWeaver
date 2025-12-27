@@ -13,7 +13,13 @@ from gi.repository import Gtk, Adw, GLib
 
 import globals as gl
 
-from .websocket_client import PipeWeaverWebSocketClient, MeterWebSocketClient
+from .websocket_client import (
+    acquire_shared_pipeweaver_client,
+    release_shared_pipeweaver_client,
+    acquire_shared_meter_client,
+    release_shared_meter_client,
+)
+from .service_monitor import add_state_change_callback, remove_state_change_callback
 from .image_renderer import ImageRenderer
 from .svg_converter import svg_to_pil, is_svg_file
 
@@ -21,8 +27,7 @@ class PipeWeaverAction(ActionBase):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.has_configuration = True
-        self.client = PipeWeaverWebSocketClient()
-        self.client.start()
+        self.client = acquire_shared_pipeweaver_client(self._on_patch_update)
         self.devices = []
         self.selected_device_id = None
         self.selected_device_name = None
@@ -32,6 +37,10 @@ class PipeWeaverAction(ActionBase):
         self.volume = 50
         self.volume_step = 5
         self._is_initializing = True
+        self._is_linked_cached = False
+        self._device_colour = {}
+        self._render_idle_source = None
+        self._last_draw_state = None
         self.icon_path_from_picker = None
         self._icon_cache = {}
         self._current_meter_a = 0
@@ -42,10 +51,11 @@ class PipeWeaverAction(ActionBase):
         self._load_settings()
         
         self._is_initializing = False
-        
-        self.client.patch_callback = self._on_patch_update
-        
+
         self._start_meter_client()
+        
+        # Register for service state change notifications
+        add_state_change_callback(self._on_service_state_change)
         
         GLib.idle_add(self.update_image)
     
@@ -160,13 +170,12 @@ class PipeWeaverAction(ActionBase):
     def _ensure_connection_and_load_devices(self):
         """Wait for connection and load devices"""
         if not self.devices:
-            max_wait = 5.0
-            wait_time = 0.0
-            while not self.client.connected and wait_time < max_wait:
-                time.sleep(0.1)
-                wait_time += 0.1
-            
-            self.devices = self.client.get_devices() if self.client.connected else []
+            if self.client.connected:
+                try:
+                    self.devices = self.client.get_devices()
+                except Exception as e:
+                    log.error(f"Error loading devices: {e}")
+                    self.devices = []
     
     def _load_device_settings(self, settings):
         """Load and validate device settings"""
@@ -188,6 +197,17 @@ class PipeWeaverAction(ActionBase):
         self.selected_device_name = device['name']
         self.selected_device_type = device['type']
         self._reset_meter_values()
+        try:
+            status_data = self._get_status_data()
+            if status_data:
+                device_data = self._get_device_by_id(self.selected_device_id, self.selected_device_type)
+                if device_data:
+                    desc = device_data.get("description", {})
+                    colour = desc.get("colour", {})
+                    if isinstance(colour, dict):
+                        self._device_colour = colour
+        except Exception:
+            self._device_colour = {}
         
         # Initialize ALL state from API
         status_data = self._get_status_data()
@@ -214,6 +234,21 @@ class PipeWeaverAction(ActionBase):
         self._current_meter_a = 0
         self._current_meter_b = 0
         self._current_meter_target = 0
+    
+    def _convert_raw_volume_with_step(self, vol_raw):
+        """Convert a raw 0-255 (or 0-100) volume to a stepped 0-100 value.
+
+        This mirrors the rounding/clamping logic used when reading volumes from
+        PipeWeaver status, keeping UI representation consistent in one place.
+        """
+        volume = int((vol_raw / 255.0) * 100) if vol_raw > 100 else vol_raw
+        step_size = getattr(self, 'volume_step', 5)
+        volume = round(volume / step_size) * step_size
+        if volume >= 99:
+            volume = 100
+        elif volume <= 1:
+            volume = 0
+        return volume
     
     def get_config_rows(self):
         """Get configuration UI rows"""
@@ -321,6 +356,17 @@ class PipeWeaverAction(ActionBase):
             self.selected_device_id = device['id']
             self.selected_device_name = device['name']
             self.selected_device_type = device['type']
+            try:
+                status_data = self._get_status_data()
+                if status_data:
+                    device_data = self._get_device_by_id(self.selected_device_id, self.selected_device_type)
+                    if device_data:
+                        desc = device_data.get("description", {})
+                        colour = desc.get("colour", {})
+                        if isinstance(colour, dict):
+                            self._device_colour = colour
+            except Exception:
+                self._device_colour = {}
             
             status_data = self._get_status_data()
             if status_data and self.selected_device_type == "source":
@@ -486,16 +532,12 @@ class PipeWeaverAction(ActionBase):
                     self.selected_device_id = device['id']
                     self.selected_device_name = device['name']
                     self.selected_device_type = device['type']
-                    self._current_meter_a = 0
-                    self._current_meter_b = 0
-                    self._current_meter_target = 0
+                    self._reset_meter_values()
                     break
             self.update_image()
         elif 'device_id' in settings:
             self.selected_device_id = settings['device_id']
-            self._current_meter_a = 0
-            self._current_meter_b = 0
-            self._current_meter_target = 0
+            self._reset_meter_values()
             for device in self.devices:
                 if device['id'] == self.selected_device_id:
                     self.selected_device_name = device['name']
@@ -551,9 +593,10 @@ class PipeWeaverAction(ActionBase):
             success = self.client.set_volume_linked(self.selected_device_id, new_linked_state)
             
             if success:
+                # Update cached link state for fast menu rendering
+                self._is_linked_cached = new_linked_state
                 self.devices = self.client.get_devices()
                 time.sleep(0.1)
-                updated_is_linked = self.client.is_volume_linked(self.selected_device_id)
                 self.update_image()
             else:
                 log.error(f"Failed to toggle volume linking for {self.selected_device_name}")
@@ -563,10 +606,20 @@ class PipeWeaverAction(ActionBase):
         
         
     def _set_volume(self, volume):
-        """Set volume for selected device (send change to API, let patches handle UI)"""
+        """Set volume for selected device.
+
+        Sends the change to PipeWeaver; UI/bars are updated when patches arrive
+        and _on_patch_update refreshes self.volume.
+        """
         if not self.selected_device_id or self._is_device_muted():
             return
         
+        # Clamp volume into valid range before sending
+        try:
+            volume = max(0, min(100, int(volume)))
+        except Exception:
+            volume = 0
+
         self._verify_and_update_device_id()
         
         try:
@@ -592,10 +645,19 @@ class PipeWeaverAction(ActionBase):
             log.error(f"Error setting volume: {e}")
     
     def _set_volume_relative(self, delta):
-        """Set volume relative to current for selected device (send change to API, let patches handle UI)"""
+        """Set volume relative to current for selected device.
+
+        Sends a relative change to PipeWeaver; UI/bars are updated when
+        patches arrive and _on_patch_update refreshes self.volume.
+        """
         if not self.selected_device_id or self._is_device_muted():
             return
         
+        try:
+            delta = int(delta)
+        except Exception:
+            delta = 0
+
         self._verify_and_update_device_id()
         
         try:
@@ -645,29 +707,13 @@ class PipeWeaverAction(ActionBase):
                             volume_dict = volumes_dict.get("volume", {})
                             if isinstance(volume_dict, dict):
                                 vol_raw = volume_dict.get(mix, 0)
-                                volume = int((vol_raw / 255.0) * 100) if vol_raw > 100 else vol_raw
-                                step_size = getattr(self, 'volume_step', 5)
-                                volume = round(volume / step_size) * step_size
-                                if volume >= 99:
-                                    volume = 100
-                                elif volume <= 1:
-                                    volume = 0
-                                return volume
+                                return self._convert_raw_volume_with_step(vol_raw)
             else:
                 devices = status_data.get("audio", {}).get("profile", {}).get("devices", {})
                 for device in devices.get("targets", {}).get("virtual_devices", []):
                     if device["description"]["id"] == self.selected_device_id:
                         vol_raw = device.get("volume", 0)
-                        volume = int((vol_raw / 255.0) * 100) if vol_raw > 100 else vol_raw
-                        # Round to nearest step boundary for accurate visual representation
-                        step_size = getattr(self, 'volume_step', 5)
-                        volume = round(volume / step_size) * step_size
-                        # Clamp to ensure we reach 0 and 100 properly
-                        if volume >= 99:
-                            volume = 100
-                        elif volume <= 1:
-                            volume = 0
-                        return volume
+                        return self._convert_raw_volume_with_step(vol_raw)
         except Exception as e:
             log.error(f"Error getting current volume for mix {mix}: {e}")
         
@@ -700,19 +746,25 @@ class PipeWeaverAction(ActionBase):
     
     def on_enable(self):
         """Called when action is enabled"""
-        for _ in range(50):
-            if self.client.connected:
-                break
-            time.sleep(0.1)
-        
+        # Non-blocking: don't wait for PipeWeaver to come up here. If the
+        # client isn't connected yet, we'll show an error state instead of
+        # blocking StreamController startup.
         if self.client.connected:
-            self.devices = self.client.get_devices()
+            try:
+                self.devices = self.client.get_devices()
+            except Exception as e:
+                log.error(f"Error getting devices on enable: {e}")
+                self.devices = []
         else:
-            log.warning("WebSocket not connected, devices may not be available")
+            log.warning("WebSocket not connected on enable; devices may not be available")
             self.devices = []
-        
+
         self._load_settings()
         self._sync_pipeweaver_state()
+
+        # Force a redraw when the action is (re)enabled so that images
+        # are restored if the host lost them while the deck was asleep.
+        self._last_draw_state = None
         self.update_image()
         
     
@@ -728,10 +780,19 @@ class PipeWeaverAction(ActionBase):
     
     def on_disable(self):
         """Called when action is disabled"""
-        if self.client:
-            self.client.patch_callback = None
+        release_shared_pipeweaver_client(self._on_patch_update)
+        remove_state_change_callback(self._on_service_state_change)
         
         self._stop_meter_client()
+    
+    def _on_service_state_change(self, available):
+        """Callback when PipeWeaver service availability changes.
+        
+        Forces a redraw to show/hide the error state.
+        """
+        # Clear last draw state to force a full redraw
+        self._last_draw_state = None
+        GLib.idle_add(self.update_image)
     
     def _meter_callback(self, node_id, percent):
         """Callback for meter updates from WebSocket"""
@@ -743,18 +804,26 @@ class PipeWeaverAction(ActionBase):
         device_data_target = self._get_device_by_id(device_id, "target")
 
         meter_changed = False
+        threshold = 5
         
         if device_data_source:
-            if self._current_meter_a != percent or self._current_meter_b != percent:
+            if (
+                abs(self._current_meter_a - percent) >= threshold
+                or abs(self._current_meter_b - percent) >= threshold
+            ):
                 self._current_meter_a = percent
                 self._current_meter_b = percent
                 meter_changed = True
         elif device_data_target:
-            if self._current_meter_target != percent:
+            if abs(self._current_meter_target - percent) >= threshold:
                 self._current_meter_target = percent
                 meter_changed = True
         else:
-            if self._current_meter_a != percent or self._current_meter_b != percent or self._current_meter_target != percent:
+            if (
+                abs(self._current_meter_a - percent) >= threshold
+                or abs(self._current_meter_b - percent) >= threshold
+                or abs(self._current_meter_target - percent) >= threshold
+            ):
                 self._current_meter_a = percent
                 self._current_meter_b = percent
                 self._current_meter_target = percent
@@ -768,8 +837,7 @@ class PipeWeaverAction(ActionBase):
         """Start WebSocket client for meter data"""
         try:
             if self._meter_client is None:
-                self._meter_client = MeterWebSocketClient(self._meter_callback)
-                self._meter_client.start()
+                self._meter_client = acquire_shared_meter_client(self._meter_callback)
         except Exception as e:
             log.error(f"Error starting meter client: {e}")
     
@@ -777,7 +845,7 @@ class PipeWeaverAction(ActionBase):
         """Stop WebSocket client for meter data"""
         try:
             if self._meter_client:
-                self._meter_client.stop()
+                release_shared_meter_client(self._meter_callback)
                 self._meter_client = None
         except Exception as e:
             log.error(f"Error stopping meter client: {e}")
@@ -786,7 +854,6 @@ class PipeWeaverAction(ActionBase):
         """Callback when status is updated via patches - update UI from API state"""
         if not self.selected_device_id:
             return
-        
         try:
             device_data = self._get_device_by_id(self.selected_device_id, self.selected_device_type)
             if not device_data:
@@ -818,11 +885,55 @@ class PipeWeaverAction(ActionBase):
             log.error(f"Error handling patch update: {e}")
     
     def update_image(self):
-        """Update button image - shows mute state or volume bars"""
-        if hasattr(self, 'set_top_label'):
-            device_name = self.selected_device_name[:25] if self.selected_device_name else "Unknown"
-            self.set_top_label(device_name, font_size=14)
-        
-        if not hasattr(self, '_image_renderer'):
-            self._image_renderer = ImageRenderer(self)
-        self._image_renderer.render_image()
+        """Update button image - shows mute state or volume bars.
+
+        Coalesces multiple rapid calls into a single idle-time render to avoid
+        sluggishness when turning knobs quickly.
+        """
+
+        # Build a simple state snapshot used to detect no-op updates.
+        try:
+            selected_mixes_tuple = tuple(sorted(self.selected_mixes)) if hasattr(self, "selected_mixes") else tuple()
+        except Exception:
+            selected_mixes_tuple = tuple()
+
+        current_state = (
+            self.selected_device_id,
+            self.selected_device_type,
+            getattr(self, "volume", None),
+            getattr(self, "_current_meter_a", None),
+            getattr(self, "_current_meter_b", None),
+            getattr(self, "_current_meter_target", None),
+            getattr(self, "_is_linked_cached", None),
+            selected_mixes_tuple,
+        )
+
+        # If nothing visually changed since the last completed draw, skip.
+        if getattr(self, "_last_draw_state", None) == current_state:
+            return
+
+        # If a render is already scheduled, just return; it will use latest state.
+        if getattr(self, "_render_idle_source", None) is not None:
+            return
+
+        def _do_render(state_snapshot=current_state):
+            try:
+                if hasattr(self, 'set_top_label'):
+                    device_name = self.selected_device_name[:25] if self.selected_device_name else "Unknown"
+                    self.set_top_label(device_name, font_size=14)
+
+                if not hasattr(self, '_image_renderer'):
+                    self._image_renderer = ImageRenderer(self)
+                self._image_renderer.render_image()
+            except Exception as e:
+                log.error(f"Error rendering image: {e}")
+            finally:
+                # Clear the source id so future updates can schedule again.
+                self._render_idle_source = None
+                # Record the last successfully drawn state so we can skip no-op updates.
+                self._last_draw_state = state_snapshot
+            # Return False to remove this idle handler.
+            return False
+
+        # Schedule rendering in the GTK main loop when idle.
+        self._render_idle_source = GLib.idle_add(_do_render)

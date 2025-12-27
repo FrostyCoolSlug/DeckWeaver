@@ -5,6 +5,8 @@ import traceback
 from PIL import Image, ImageDraw, ImageFont  # type: ignore
 from loguru import logger as log  # type: ignore
 
+from .service_monitor import is_service_available
+
 
 class ImageRenderer:
     """Renders images for PipeWeaver actions using PIL"""
@@ -12,63 +14,52 @@ class ImageRenderer:
     def __init__(self, action):
         """Initialize renderer with action instance"""
         self.action = action
+        self._font_cache = {}
+        self._icon_cache_local = {}
     
     def render_image(self):
         """Render the button image - shows mute state or volume bars"""
+        # Check service availability first - show error state if down
+        if not is_service_available():
+            image = self._render_service_unavailable()
+            if image:
+                self._set_image_on_action(image)
+            return
+        
         if not self.action.selected_device_name:
             display_text = self.action.selected_device_name if self.action.selected_device_name else "PipeWeaver"
             if hasattr(self.action, 'set_label'):
                 self.action.set_label(text=display_text, position="center", font_size=10)
             return
-
-        self.action._verify_and_update_device_id()
         
+        # Use only cached UI state for drawing to keep rendering snappy and avoid
+        # blocking on status/device lookups.
         device_short = self.action.selected_device_name[:7] if self.action.selected_device_name else ""
 
-        muted = False
-        device_data = None
-        is_linked = False
-        
-        try:
-            device_data = self.action._get_device_by_id(self.action.selected_device_id, self.action.selected_device_type)
-            if device_data:
-                if self.action.selected_device_type == "source":
-                    mute_states = device_data.get("mute_states", {}).get("mute_state", [])
-                    muted = "TargetA" in mute_states or "TargetB" in mute_states
-                else:
-                    muted = device_data.get("mute_state") == "Muted"
-                
-                is_a_muted = muted
-                is_b_muted = muted
-            else:
-                muted = False
-                is_a_muted = False
-                is_b_muted = False
-        except Exception as e:
-            log.error(f"Error getting mute state: {e}")
-            muted = False
-            is_a_muted = False
-            is_b_muted = False
-        
         try:
             if hasattr(self.action, '_menu_mode') and self.action._menu_mode:
                 image = self._render_menu()
             elif self.action.selected_device_type == "source":
-                image = self._render_source_device(device_data, muted, device_short, is_a_muted, is_b_muted)
+                image = self._render_source_device()
             else:
-                image = self._render_target_device(device_data, muted, device_short)
+                image = self._render_target_device()
             
             if image:
-                self._set_image_on_action(image, device_short)
+                self._set_image_on_action(image)
         except Exception as e:
             log.error(f"Error drawing volume bars: {e}")
             log.error(traceback.format_exc())
     
     def _load_monospace_font(self, size=12):
-        """Load a bold, clean monospace font with fallback to default"""
+        """Load a bold, clean monospace font with caching and fallback to default."""
+        cache_key = ("mono", size)
+        cached = self._font_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
         font_paths = [
             "/usr/share/fonts/truetype/jetbrains-mono/JetBrainsMono-Bold.ttf",
-            "/usr/share/fonts/truetype/source-code-pro/SourceCodePro-Bold.ttf", 
+            "/usr/share/fonts/truetype/source-code-pro/SourceCodePro-Bold.ttf",
             "/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf",
             "/usr/share/fonts/truetype/liberation/LiberationMono-Bold.ttf",
             "/usr/share/fonts/truetype/ubuntu/UbuntuMono-Bold.ttf",
@@ -81,72 +72,95 @@ class ImageRenderer:
             "/System/Library/Fonts/Monaco.ttf",
             "C:/Windows/Fonts/consola.ttf",
         ]
-        
+
         for font_path in font_paths:
             try:
-                return ImageFont.truetype(font_path, size)
-            except:
+                font = ImageFont.truetype(font_path, size)
+                self._font_cache[cache_key] = font
+                return font
+            except Exception:
                 continue
-        
-        return ImageFont.load_default()
+
+        font = ImageFont.load_default()
+        self._font_cache[cache_key] = font
+        return font
     
-    def _render_source_device(self, device_data, muted, device_short, is_a_muted=False, is_b_muted=False):
-        """Render image for source device with two volume bars"""
-        if device_data:
+    def _render_service_unavailable(self):
+        """Render error state when PipeWeaver service is unavailable.
+        
+        Shows a yellow/amber background with error message to clearly indicate
+        the service is down.
+        """
+        try:
+            image_width = 480
+            image_height = 240
+            
+            # Yellow/amber background for warning state
+            bg_color = (255, 193, 7, 255)  # Amber/yellow
+            image = Image.new('RGBA', (image_width, image_height), bg_color)
+            draw = ImageDraw.Draw(image)
+            
+            # Load font for text
             try:
-                device_colour = device_data.get("description", {}).get("colour", {})
-                                
-                volumes_dict = device_data.get("volumes", {})
-                if isinstance(volumes_dict, dict):
-                    volume_dict = volumes_dict.get("volume", {})
-                    if isinstance(volume_dict, dict):
-                        volume_a_raw = volume_dict.get("A", 0)
-                        volume_b_raw = volume_dict.get("B", 0)
-                        
-                        if volume_a_raw > 100:
-                            volume_a = int((volume_a_raw / 255.0) * 100)
-                        else:
-                            volume_a = volume_a_raw
-                        
-                        if volume_b_raw > 100:
-                            volume_b = int((volume_b_raw / 255.0) * 100)
-                        else:
-                            volume_b = volume_b_raw
-                        
-                        volumes = [volume_a, volume_b]
-                    else:
-                        volumes = [0, 0]
-                else:
-                    volumes = [0, 0]
-            except Exception as vol_e:
-                log.error(f"Error accessing volume data: {vol_e}")
-                volumes = [0, 0]
-                device_colour = {}
-        else:
-            volumes = [0, 0]
-            device_colour = {}
+                title_font = self._load_monospace_font(28)
+                subtitle_font = self._load_monospace_font(18)
+            except Exception:
+                title_font = ImageFont.load_default()
+                subtitle_font = ImageFont.load_default()
+            
+            # Dark text for contrast on yellow background
+            text_color = (33, 33, 33, 255)
+            
+            # Draw warning icon (triangle with exclamation)
+            center_x = image_width // 2
+            
+            # Title text
+            title = "PipeWeaver"
+            title_bbox = draw.textbbox((0, 0), title, font=title_font)
+            title_width = title_bbox[2] - title_bbox[0]
+            title_x = (image_width - title_width) // 2
+            draw.text((title_x, 60), title, fill=text_color, font=title_font)
+            
+            # Subtitle text
+            subtitle = "Service Unavailable"
+            subtitle_bbox = draw.textbbox((0, 0), subtitle, font=subtitle_font)
+            subtitle_width = subtitle_bbox[2] - subtitle_bbox[0]
+            subtitle_x = (image_width - subtitle_width) // 2
+            draw.text((subtitle_x, 100), subtitle, fill=text_color, font=subtitle_font)
+            
+            # Hint text
+            hint = "Start PipeWeaver to continue"
+            hint_bbox = draw.textbbox((0, 0), hint, font=subtitle_font)
+            hint_width = hint_bbox[2] - hint_bbox[0]
+            hint_x = (image_width - hint_width) // 2
+            draw.text((hint_x, 160), hint, fill=(66, 66, 66, 255), font=subtitle_font)
+            
+            return image
+            
+        except Exception as e:
+            log.error(f"Error rendering service unavailable state: {e}")
+            log.error(traceback.format_exc())
+            return None
+    
+    def _render_source_device(self, is_a_muted=False, is_b_muted=False):
+        """Render image for source device with two volume bars.
+
+        Uses only locally cached UI state (volume, meters, selected mixes) for speed.
+        """
+        device_colour = getattr(self.action, "_device_colour", {}) or {}
+
+        # Use the currently displayed volume for both bars; selected_mixes decides focus.
+        volume_value = getattr(self.action, "volume", 0) or 0
+        volumes = [volume_value, volume_value]
         
         try:
             is_linked = False
-            if device_data:
-                volumes_dict = device_data.get("volumes", {})
-                if isinstance(volumes_dict, dict):
-                    volumes_linked = volumes_dict.get("volumes_linked")
-                    is_linked = volumes_linked is not None
             
             image_width = 480
             image_height = 240
             
             image = Image.new('RGBA', (image_width, image_height), (0, 0, 0, 0))
             draw = ImageDraw.Draw(image)
-            
-            try:
-                font = self._load_monospace_font(38)
-            except:
-                try:
-                    font = self._load_monospace_font(38)
-                except:
-                    font = ImageFont.load_default()
             
             edge_padding = 10
             
@@ -164,9 +178,13 @@ class ImageRenderer:
             bar_b_y = image_height - bar_height - edge_padding - 15
             bar_a_y = bar_b_y - bar_height - bar_spacing
             
+            volume_a = volumes[0] if len(volumes) > 0 else 0
+            volume_b = volumes[1] if len(volumes) > 1 else 0
+            
+            # Labels for volume and meter
             try:
                 label_font = self._load_monospace_font(12)
-            except:
+            except Exception:
                 label_font = ImageFont.load_default()
 
             draw.text((start_x + 4, bar_a_y - 15), "VOL", fill=(204, 204, 204, 204), font=label_font)
@@ -174,9 +192,6 @@ class ImageRenderer:
             meter_label_y = bar_a_y + bar_height + 12
             draw.text((start_x + 4, meter_label_y), "LVL", fill=(204, 204, 204, 204), font=label_font)
 
-            volume_a = volumes[0] if len(volumes) > 0 else 0
-            volume_b = volumes[1] if len(volumes) > 1 else 0
-            
             if is_linked:
                 self._draw_linked_volume_bars(draw, start_x, bar_a_y, bar_width, bar_height, radius,
                                              volume_a, volume_b, is_a_muted, is_b_muted, device_colour)
@@ -204,14 +219,19 @@ class ImageRenderer:
                     icon_name = "unlinked-dimmed.png"
                 
                 icon_path = self.action.plugin_base.get_asset_path(icon_name, ["icons"])
-                if os.path.exists(icon_path):
+                cache_key = (icon_path, icon_size)
+                cached_icon = self._icon_cache_local.get(cache_key)
+                if cached_icon is None and os.path.exists(icon_path):
                     link_icon = Image.open(icon_path)
                     if link_icon.mode == 'P':
                         link_icon = link_icon.convert('RGBA')
+                    if link_icon.mode != 'RGBA':
+                        link_icon = link_icon.convert('RGBA')
                     link_icon_resized = link_icon.resize((icon_size, icon_size), Image.Resampling.LANCZOS)
-                    if link_icon_resized.mode != 'RGBA':
-                        link_icon_resized = link_icon_resized.convert('RGBA')
-                    image.paste(link_icon_resized, (icon_x, icon_y), link_icon_resized)
+                    cached_icon = link_icon_resized
+                    self._icon_cache_local[cache_key] = cached_icon
+                if cached_icon is not None:
+                    image.paste(cached_icon, (icon_x, icon_y), cached_icon)
                 indicator_index += 1
 
             self._draw_unlinked_volume_bars(draw, start_x, bar_a_y, bar_width, bar_height, radius,
@@ -225,16 +245,12 @@ class ImageRenderer:
             log.error(traceback.format_exc())
             return None
     
-    def _render_target_device(self, device_data, muted, device_short):
-        """Render image for target device with single volume bar"""
-        if device_data:
-            volume_raw = device_data.get("volume", 0)
-            if volume_raw > 100:
-                volume = int((volume_raw / 255.0) * 100)
-            else:
-                volume = volume_raw
-        else:
-            volume = 0
+    def _render_target_device(self, muted=False):
+        """Render image for target device with single volume bar.
+
+        Uses only the cached UI volume value for speed.
+        """
+        volume = getattr(self.action, "volume", 0) or 0
         
         try:
             image_width = 480
@@ -242,15 +258,6 @@ class ImageRenderer:
             
             image = Image.new('RGBA', (image_width, image_height), (0, 0, 0, 0))
             draw = ImageDraw.Draw(image)
-            
-            try:
-                font = self._load_monospace_font(38)
-            except:
-                try:
-                    font = self._load_monospace_font(38)
-                except:
-                    font = ImageFont.load_default()
-            
             edge_padding = 10
             
             icon_max_size = 150
@@ -267,10 +274,10 @@ class ImageRenderer:
             display_volume = volume
             bar_fill_width = int((display_volume / 100.0) * bar_width)
 
-            
+            # Labels for volume and meter
             try:
                 label_font = self._load_monospace_font(12)
-            except:
+            except Exception:
                 label_font = ImageFont.load_default()
 
             draw.text((bar_x + 4, bar_y - 15), "VOL", fill=(204, 204, 204, 204), font=label_font)
@@ -388,44 +395,8 @@ class ImageRenderer:
                         color = (device_colour['red'], device_colour['green'], device_colour['blue'], 255)
                     else:
                         color = fallback_color
-                    
-                    self._draw_gradient_bar(draw, fill_x, fill_y, fill_x2, fill_y2, color)
-    
-    def _draw_gradient_bar(self, draw, x1, y1, x2, y2, base_color, radius=4):
-        """Draw a gradient bar from base_color to darker shade"""
-        width = x2 - x1
-        height = y2 - y1
-        
-        if width <= 0 or height <= 0:
-            return
-        
-        darker_factor = 0.6
-        end_color = (
-            int(base_color[0] * darker_factor),
-            int(base_color[1] * darker_factor),
-            int(base_color[2] * darker_factor),
-            base_color[3]
-        )
-        
-        strips = max(1, width // 2)
-        for i in range(strips):
-            strip_x = x1 + (i * width // strips)
-            strip_width = max(1, (width // strips))
-            
-            strip_x2 = min(strip_x + strip_width, x2)
-            
-            if strip_x2 <= strip_x:
-                continue
-            
-            ratio = i / max(1, strips - 1)
-            strip_color = (
-                int(base_color[0] + (end_color[0] - base_color[0]) * ratio),
-                int(base_color[1] + (end_color[1] - base_color[1]) * ratio),
-                int(base_color[2] + (end_color[2] - base_color[2]) * ratio),
-                base_color[3]
-            )
-            
-            draw.rectangle([strip_x, y1, strip_x2, y2], fill=strip_color)
+                    # Simple solid fill instead of a multi-strip gradient for speed.
+                    draw.rectangle([fill_x, fill_y, fill_x2, fill_y2], fill=color)
     
     def _draw_linked_volume_bars(self, draw, start_x, start_y, bar_width, bar_height, radius,
                                    volume_a, volume_b, is_a_muted, is_b_muted, device_colour=None):
@@ -528,9 +499,13 @@ class ImageRenderer:
         image_height = 240
         image = Image.new("RGBA", (image_width, image_height), (0, 0, 0, 0))
         draw = ImageDraw.Draw(image)
-        
-        button_font = self._load_monospace_font(64)
-        
+
+        # Cached monospace font for button labels
+        try:
+            button_font = self._load_monospace_font(64)
+        except Exception:
+            button_font = ImageFont.load_default()
+
         margin = 15
         total_margins = margin * 4
         button_width = (image_width - total_margins) // 3
@@ -548,12 +523,11 @@ class ImageRenderer:
             x = start_x + i * (button_width + margin)
             y = start_y
             
+            # Use cached link state from the action to avoid client calls during
+            # rendering.
             if action_key == "link" and self.action.selected_device_id:
-                is_linked = self.action.client.is_volume_linked(self.action.selected_device_id)
-                if is_linked:
-                    label = "Unlink"
-                else:
-                    label = "Link"
+                is_linked = getattr(self.action, "_is_linked_cached", False)
+                label = "Unlink" if is_linked else "Link"
             
             is_selected = False
             if action_key == "bus_a" and "A" in self.action.selected_mixes:
@@ -593,33 +567,39 @@ class ImageRenderer:
                 icon_y = y + (button_height - icon_size) // 2
                 
                 if self.action.selected_device_id:
-                    is_linked = self.action.client.is_volume_linked(self.action.selected_device_id)
+                    is_linked = getattr(self.action, "_is_linked_cached", False)
                     icon_name = "linked-white.png" if is_linked else "unlinked-dimmed.png"
                 else:
                     icon_name = "unlinked-dimmed.png"
                 
                 icon_path = self.action.plugin_base.get_asset_path(icon_name, ["icons"])
-                if os.path.exists(icon_path):
+                cache_key = (icon_path, icon_size)
+                cached_icon = self._icon_cache_local.get(cache_key)
+                if cached_icon is None and os.path.exists(icon_path):
                     link_icon = Image.open(icon_path)
                     if link_icon.mode == 'P':
                         link_icon = link_icon.convert('RGBA')
                     elif link_icon.mode != 'RGBA':
                         link_icon = link_icon.convert('RGBA')
                     link_icon_resized = link_icon.resize((icon_size, icon_size), Image.Resampling.LANCZOS)
-                    image.paste(link_icon_resized, (icon_x, icon_y), link_icon_resized)
+                    cached_icon = link_icon_resized
+                    self._icon_cache_local[cache_key] = cached_icon
+                if cached_icon is not None:
+                    image.paste(cached_icon, (icon_x, icon_y), cached_icon)
             else:
-                text_bbox = draw.textbbox((0, 0), label, font=button_font)
-                text_width = text_bbox[2] - text_bbox[0]
-                text_height = text_bbox[3] - text_bbox[1]
-                text_x = x + (button_width - text_width) // 2
-                text_y = y + (button_height - text_height) // 2 - text_bbox[1]
-                
+                # Center label text inside the button
+                try:
+                    text_bbox = draw.textbbox((0, 0), label, font=button_font)
+                    text_width = text_bbox[2] - text_bbox[0]
+                    text_height = text_bbox[3] - text_bbox[1]
+                    text_x = x + (button_width - text_width) // 2
+                    text_y = y + (button_height - text_height) // 2 - text_bbox[1]
+                except Exception:
+                    # Fallback: approximate centering without bbox
+                    text_x = x + button_width // 4
+                    text_y = y + button_height // 4
+
                 draw.text((text_x, text_y), label, fill=(255, 255, 255, 255), font=button_font)
-        
-        self._menu_buttons = []
-        for i, (label, action_key, color) in enumerate(buttons):
-            x = start_x + i * (button_width + margin)
-            y = start_y
             button_info = {
                 'x': x,
                 'y': y,
@@ -631,7 +611,7 @@ class ImageRenderer:
         
         return image
     
-    def _set_image_on_action(self, image, device_short):
+    def _set_image_on_action(self, image):
         """Set the rendered image on the action"""
         try:
             image.load()
