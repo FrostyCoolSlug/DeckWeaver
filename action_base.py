@@ -384,6 +384,8 @@ class PipeWeaverAction(ActionBase):
                 device_name = self.selected_device_name[:25] if self.selected_device_name else "Unknown"
                 self.set_top_label(device_name, font_size=14)
             
+            # Clear last draw state to force redraw with new device
+            self._last_draw_state = None
             self.update_image()
     
     
@@ -406,6 +408,8 @@ class PipeWeaverAction(ActionBase):
         self.set_settings(settings)
         self._update_icon_display()
         
+        # Clear last draw state to force redraw without icon
+        self._last_draw_state = None
         GLib.idle_add(self.update_image)
         
     def on_icon_picker_clicked(self, button, *args):
@@ -430,6 +434,8 @@ class PipeWeaverAction(ActionBase):
         """Handle icon selection from picker"""
         self.icon_path_from_picker = icon_path
         self.set_settings({"icon_path_from_picker": icon_path})
+        # Clear last draw state to force redraw with new icon
+        self._last_draw_state = None
         self.update_image()
     
     def _update_icon_display(self):
@@ -534,6 +540,8 @@ class PipeWeaverAction(ActionBase):
                     self.selected_device_type = device['type']
                     self._reset_meter_values()
                     break
+            # Clear last draw state to force redraw with new device
+            self._last_draw_state = None
             self.update_image()
         elif 'device_id' in settings:
             self.selected_device_id = settings['device_id']
@@ -543,6 +551,8 @@ class PipeWeaverAction(ActionBase):
                     self.selected_device_name = device['name']
                     self.selected_device_type = device['type']
                     break
+            # Clear last draw state to force redraw with new device
+            self._last_draw_state = None
             self.update_image()
     
     def _verify_and_update_device_id(self):
@@ -906,6 +916,7 @@ class PipeWeaverAction(ActionBase):
             getattr(self, "_current_meter_target", None),
             getattr(self, "_is_linked_cached", None),
             selected_mixes_tuple,
+            getattr(self, "icon_path_from_picker", None),
         )
 
         # If nothing visually changed since the last completed draw, skip.
