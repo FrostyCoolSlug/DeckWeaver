@@ -10,12 +10,15 @@ import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 gi.require_version("GLib", "2.0")
-from gi.repository import Adw, GLib, Gtk
+gi.require_version("Gdk", "4.0")
+gi.require_version("GdkPixbuf", "2.0")
+from gi.repository import Adw, GLib, Gdk, Gtk, GdkPixbuf
 
 from src.backend.PluginManager.ActionBase import ActionBase  # type: ignore
 import globals as gl
 
 from .constants import (
+    COLOR_METER,
     DEFAULT_VOLUME,
     DEFAULT_VOLUME_STEP,
     DEVICE_TYPE_SOURCE,
@@ -61,6 +64,8 @@ class PipeWeaverAction(ActionBase):
         self._current_meter_target: int = 0
         self._meter_client: Optional[MeterWebSocketClient] = None
         self._is_muted: bool = False
+        self._meter_color: Optional[tuple[int, int, int, int]] = None
+        self._volume_bar_color: Optional[tuple[int, int, int, int]] = None
         self.client: PipeWeaverWebSocketClient
         
         self._load_settings()
@@ -105,6 +110,19 @@ class PipeWeaverAction(ActionBase):
         self._load_device_settings(settings)
         self.volume_step = settings.get('volume_step', DEFAULT_VOLUME_STEP)
         self.icon_path_from_picker = settings.get("icon_path_from_picker")
+        
+        # Load color settings
+        meter_color = settings.get("meter_color")
+        if meter_color and isinstance(meter_color, (list, tuple)) and len(meter_color) == 4:
+            self._meter_color = tuple(int(c) for c in meter_color)
+        else:
+            self._meter_color = COLOR_METER
+        
+        volume_bar_color = settings.get("volume_bar_color")
+        if volume_bar_color and isinstance(volume_bar_color, (list, tuple)) and len(volume_bar_color) == 4:
+            self._volume_bar_color = tuple(int(c) for c in volume_bar_color)
+        else:
+            self._volume_bar_color = None
     
     def _load_devices(self) -> list[DeviceInfo]:
         if not self.client.connected:
@@ -141,6 +159,7 @@ class PipeWeaverAction(ActionBase):
             if not status_data:
                 self._device_color = {}
                 self._is_muted = False
+                self._update_volume_bar_color_button()
                 return
             
             device_data = self._get_device_by_id(self.selected_device_id, self.selected_device_type)
@@ -157,9 +176,40 @@ class PipeWeaverAction(ActionBase):
             else:
                 self._device_color = {}
                 self._is_muted = False
+            
+            # Update volume bar color button if no override is set
+            self._update_volume_bar_color_button()
         except Exception:
             self._device_color = {}
             self._is_muted = False
+            self._update_volume_bar_color_button()
+    
+    def _update_volume_bar_color_button(self) -> None:
+        """Update the volume bar color button to show device color if no override is set"""
+        if not hasattr(self, 'volume_bar_color_button'):
+            return
+        
+        # Only update if there's no override
+        if getattr(self, "_volume_bar_color", None) is not None:
+            return
+        
+        # Use device color from API
+        device_color = getattr(self, "_device_color", {}) or {}
+        if device_color and 'red' in device_color and 'green' in device_color and 'blue' in device_color:
+            rgba = Gdk.RGBA()
+            rgba.red = device_color['red'] / 255.0
+            rgba.green = device_color['green'] / 255.0
+            rgba.blue = device_color['blue'] / 255.0
+            rgba.alpha = 1.0
+            self.volume_bar_color_button.set_rgba(rgba)
+        else:
+            # Fallback to white if no device color
+            rgba = Gdk.RGBA()
+            rgba.red = 1.0
+            rgba.green = 1.0
+            rgba.blue = 1.0
+            rgba.alpha = 1.0
+            self.volume_bar_color_button.set_rgba(rgba)
     
     def _set_selected_device(
         self, device: DeviceInfo, settings: dict[str, Any], saved_device_id: Optional[str] = None
@@ -218,34 +268,96 @@ class PipeWeaverAction(ActionBase):
         self.device_selector.connect("notify::selected-item", self.on_device_changed)
         self._populate_device_list()
         
-        icon_expander = Adw.ExpanderRow()
-        icon_expander.set_title(self.plugin_base.lm.get("ui.custom_icon.title"))
-        icon_expander.set_subtitle(self.plugin_base.lm.get("ui.custom_icon.subtitle"))
+        # Add refresh button between label and dropdown
+        refresh_button = Gtk.Button(
+            icon_name="view-refresh-symbolic",
+            valign=Gtk.Align.CENTER,
+            tooltip_text=self.plugin_base.lm.get("ui.refresh_devices.button")
+        )
+        refresh_button.connect("clicked", self.on_refresh_clicked)
         
-        icon_picker_row = Adw.ActionRow()
-        icon_picker_row.set_title("Browse Icon Library")
+        # Insert refresh button before the dropdown by accessing the internal box structure
+        def insert_refresh_button():
+            try:
+                # ComboRow extends ActionRow, which has a child Box
+                main_box = self.device_selector.get_child()
+                if main_box and isinstance(main_box, Gtk.Box):
+                    # Get the suffix box (last child, contains the dropdown)
+                    suffix_box = main_box.get_last_child()
+                    if suffix_box:
+                        # Insert the refresh button before the suffix box
+                        # Find the index of suffix_box and insert before it
+                        children = []
+                        child = main_box.get_first_child()
+                        while child:
+                            children.append(child)
+                            if child == suffix_box:
+                                break
+                            child = child.get_next_sibling()
+                        
+                        # Insert refresh button before suffix_box
+                        if suffix_box in children:
+                            suffix_index = children.index(suffix_box)
+                            # Insert at the position before suffix
+                            main_box.insert_child_after(refresh_button, children[suffix_index - 1] if suffix_index > 0 else None)
+            except Exception as e:
+                log.debug(f"Could not insert refresh button in custom position: {e}")
+                # Fallback: use suffix (will be after dropdown)
+                self.device_selector.add_suffix(refresh_button)
         
-        if self.icon_path_from_picker:
-            icon_name = os.path.splitext(os.path.basename(self.icon_path_from_picker))[0]
-            icon_picker_row.set_subtitle(f"Selected: {icon_name}")
+        # Use idle_add to ensure the widget is fully constructed
+        GLib.idle_add(insert_refresh_button)
+        
+        icon_row = Adw.ActionRow()
+        icon_row.set_title(self.plugin_base.lm.get("ui.custom_icon.title"))
+        
+        icon_content_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12, valign=Gtk.Align.CENTER)
+        
+        # Show selected icon preview - use Gtk.Image with pre-scaled pixbuf to enforce 20x20 max
+        self.icon_preview = Gtk.Image()
+        self.icon_preview.set_size_request(20, 20)
+        self.icon_preview.set_hexpand(False)
+        self.icon_preview.set_vexpand(False)
+        self.icon_preview.set_pixel_size(20)
+        
+        if self.icon_path_from_picker and os.path.exists(self.icon_path_from_picker):
+            try:
+                # Load and scale image to exactly 20x20 before setting
+                pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(
+                    self.icon_path_from_picker,
+                    width=20,
+                    height=20,
+                    preserve_aspect_ratio=True
+                )
+                self.icon_preview.set_from_pixbuf(pixbuf)
+                icon_name = os.path.splitext(os.path.basename(self.icon_path_from_picker))[0]
+                icon_row.set_subtitle(f"Selected: {icon_name}")
+            except Exception:
+                icon_row.set_subtitle("Select an icon from StreamController's icon packs")
+                self.icon_preview.set_visible(False)
         else:
-            icon_picker_row.set_subtitle("Select an icon from StreamController's icon packs")
+            icon_row.set_subtitle("Select an icon from StreamController's icon packs")
+            self.icon_preview.set_visible(False)
         
-        icon_picker_button = Gtk.Button(label="Choose Icon")
+        self.icon_preview_container = self.icon_preview  # Store reference for visibility updates
+        
+        icon_content_box.append(self.icon_preview)
+        
+        icon_button_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        icon_picker_button = Gtk.Button(icon_name="folder-symbolic", valign=Gtk.Align.CENTER)
+        icon_picker_button.set_tooltip_text("Choose icon")
         icon_picker_button.add_css_class("suggested-action")
         icon_picker_button.connect("clicked", self.on_icon_picker_clicked)
-        icon_picker_row.add_suffix(icon_picker_button)
-        icon_expander.add_row(icon_picker_row)
+        icon_button_box.append(icon_picker_button)
         
-        remove_icon_row = Adw.ActionRow()
-        remove_icon_row.set_title("Remove Icon")
-        remove_icon_row.set_subtitle("Clear the selected icon")
-        
-        remove_icon_button = Gtk.Button(label="Remove")
-        remove_icon_button.add_css_class("destructive-action")
+        remove_icon_button = Gtk.Button(icon_name="edit-clear-symbolic", valign=Gtk.Align.CENTER)
+        remove_icon_button.set_tooltip_text("Remove icon")
         remove_icon_button.connect("clicked", self.on_remove_icon_clicked)
-        remove_icon_row.add_suffix(remove_icon_button)
-        icon_expander.add_row(remove_icon_row)
+        icon_button_box.append(remove_icon_button)
+        
+        icon_content_box.append(icon_button_box)
+        icon_row.add_suffix(icon_content_box)
+        self.icon_row = icon_row  # Store reference for updates
         
         self.volume_step_row = Adw.SpinRow.new_with_range(MIN_VOLUME_STEP, MAX_VOLUME_STEP, 1)
         self.volume_step_row.set_title(self.plugin_base.lm.get("ui.volume_step.title"))
@@ -256,17 +368,81 @@ class PipeWeaverAction(ActionBase):
         self.volume_step_row.set_value(volume_step)
         self.volume_step_row.connect("notify::value", self.on_volume_step_changed)
 
-        refresh_btn = Gtk.Button.new_with_label(self.plugin_base.lm.get("ui.refresh_devices.button"))
-        refresh_btn.add_css_class("suggested-action")
-        refresh_btn.set_margin_top(24)
-        refresh_btn.set_margin_bottom(12)
-        refresh_btn.connect("clicked", self.on_refresh_clicked)
+        meter_color_row = Adw.ActionRow()
+        meter_color_row.set_title("Meter Color")
+        meter_color_row.set_subtitle("Color for the audio level meter")
+        
+        meter_color_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        self.meter_color_button = Gtk.ColorButton(valign=Gtk.Align.CENTER)
+        meter_color = getattr(self, "_meter_color", None) or COLOR_METER
+        rgba = Gdk.RGBA()
+        rgba.red = meter_color[0] / 255.0
+        rgba.green = meter_color[1] / 255.0
+        rgba.blue = meter_color[2] / 255.0
+        rgba.alpha = meter_color[3] / 255.0
+        self.meter_color_button.set_rgba(rgba)
+        self.meter_color_button.connect("color-set", self.on_meter_color_changed)
+        meter_color_box.append(self.meter_color_button)
+        
+        clear_meter_color_button = Gtk.Button(icon_name="edit-clear-symbolic", valign=Gtk.Align.CENTER)
+        clear_meter_color_button.set_tooltip_text("Reset to default")
+        clear_meter_color_button.connect("clicked", self.on_clear_meter_color_clicked)
+        meter_color_box.append(clear_meter_color_button)
+        
+        meter_color_row.add_suffix(meter_color_box)
+
+        volume_bar_color_row = Adw.ActionRow()
+        volume_bar_color_row.set_title("Volume Bar Color")
+        volume_bar_color_row.set_subtitle("Override the volume bar color")
+        
+        volume_bar_color_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        self.volume_bar_color_button = Gtk.ColorButton(valign=Gtk.Align.CENTER)
+        
+        # Load color: use override if set, otherwise use device color from API
+        volume_bar_color = getattr(self, "_volume_bar_color", None)
+        if not volume_bar_color:
+            # No override, use device color from API
+            device_color = getattr(self, "_device_color", {}) or {}
+            if device_color and 'red' in device_color and 'green' in device_color and 'blue' in device_color:
+                rgba = Gdk.RGBA()
+                rgba.red = device_color['red'] / 255.0
+                rgba.green = device_color['green'] / 255.0
+                rgba.blue = device_color['blue'] / 255.0
+                rgba.alpha = 1.0
+                self.volume_bar_color_button.set_rgba(rgba)
+            else:
+                # Fallback to white if no device color
+                rgba = Gdk.RGBA()
+                rgba.red = 1.0
+                rgba.green = 1.0
+                rgba.blue = 1.0
+                rgba.alpha = 1.0
+                self.volume_bar_color_button.set_rgba(rgba)
+        else:
+            # Use override
+            rgba = Gdk.RGBA()
+            rgba.red = volume_bar_color[0] / 255.0
+            rgba.green = volume_bar_color[1] / 255.0
+            rgba.blue = volume_bar_color[2] / 255.0
+            rgba.alpha = volume_bar_color[3] / 255.0
+            self.volume_bar_color_button.set_rgba(rgba)
+        
+        self.volume_bar_color_button.connect("color-set", self.on_volume_bar_color_changed)
+        volume_bar_color_box.append(self.volume_bar_color_button)
+        
+        clear_volume_bar_color_button = Gtk.Button(icon_name="edit-clear-symbolic", valign=Gtk.Align.CENTER)
+        clear_volume_bar_color_button.set_tooltip_text("Clear override")
+        clear_volume_bar_color_button.connect("clicked", self.on_clear_volume_bar_color_clicked)
+        volume_bar_color_box.append(clear_volume_bar_color_button)
+        
+        volume_bar_color_row.add_suffix(volume_bar_color_box)
         
         return [
             self.device_selector,
-            icon_expander,
+            icon_row,
             self.volume_step_row,
-            refresh_btn
+            meter_color_row,
+            volume_bar_color_row
         ]
     
     def _update_device_selection(self, device: DeviceInfo) -> None:
@@ -340,6 +516,76 @@ class PipeWeaverAction(ActionBase):
         settings["volume_step"] = volume_step
         self.set_settings(settings)
         self.volume_step = volume_step
+    
+    def on_meter_color_changed(self, button: Gtk.ColorButton) -> None:
+        rgba = button.get_rgba()
+        self._meter_color = (
+            int(rgba.red * 255),
+            int(rgba.green * 255),
+            int(rgba.blue * 255),
+            int(rgba.alpha * 255)
+        )
+        settings = self.get_settings()
+        settings["meter_color"] = list(self._meter_color)
+        self.set_settings(settings)
+        self._last_draw_state = None
+        self.update_image()
+    
+    def on_clear_meter_color_clicked(self, button: Gtk.Button) -> None:
+        self._meter_color = COLOR_METER
+        settings = self.get_settings()
+        settings["meter_color"] = list(self._meter_color)
+        self.set_settings(settings)
+        self._last_draw_state = None
+        self.update_image()
+        # Reset the color button to show default color
+        if hasattr(self, 'meter_color_button'):
+            rgba = Gdk.RGBA()
+            rgba.red = COLOR_METER[0] / 255.0
+            rgba.green = COLOR_METER[1] / 255.0
+            rgba.blue = COLOR_METER[2] / 255.0
+            rgba.alpha = COLOR_METER[3] / 255.0
+            self.meter_color_button.set_rgba(rgba)
+    
+    def on_volume_bar_color_changed(self, button: Gtk.ColorButton) -> None:
+        rgba = button.get_rgba()
+        self._volume_bar_color = (
+            int(rgba.red * 255),
+            int(rgba.green * 255),
+            int(rgba.blue * 255),
+            int(rgba.alpha * 255)
+        )
+        settings = self.get_settings()
+        settings["volume_bar_color"] = list(self._volume_bar_color)
+        self.set_settings(settings)
+        self._last_draw_state = None
+        self.update_image()
+    
+    def on_clear_volume_bar_color_clicked(self, button: Gtk.Button) -> None:
+        self._volume_bar_color = None
+        settings = self.get_settings()
+        settings.pop("volume_bar_color", None)
+        self.set_settings(settings)
+        self._last_draw_state = None
+        self.update_image()
+        # Show the device color from API in the color button
+        if hasattr(self, 'volume_bar_color_button'):
+            device_color = getattr(self, "_device_color", {}) or {}
+            if device_color and 'red' in device_color and 'green' in device_color and 'blue' in device_color:
+                rgba = Gdk.RGBA()
+                rgba.red = device_color['red'] / 255.0
+                rgba.green = device_color['green'] / 255.0
+                rgba.blue = device_color['blue'] / 255.0
+                rgba.alpha = 1.0
+                self.volume_bar_color_button.set_rgba(rgba)
+            else:
+                # Fallback to white if no device color
+                rgba = Gdk.RGBA()
+                rgba.red = 1.0
+                rgba.green = 1.0
+                rgba.blue = 1.0
+                rgba.alpha = 1.0
+                self.volume_bar_color_button.set_rgba(rgba)
 
     def on_remove_icon_clicked(self, button: Gtk.Button, *args: Any) -> None:
         settings = self.get_settings()
@@ -347,6 +593,12 @@ class PipeWeaverAction(ActionBase):
         self.icon_path_from_picker = None
         self._icon_cache.clear()
         self.set_settings(settings)
+        
+        # Update icon preview
+        if hasattr(self, 'icon_preview'):
+            self.icon_preview.set_visible(False)
+            if hasattr(self, 'icon_row'):
+                self.icon_row.set_subtitle("Select an icon from StreamController's icon packs")
         
         # Clear last draw state to force redraw without icon
         self._last_draw_state = None
@@ -367,14 +619,78 @@ class PipeWeaverAction(ActionBase):
             log.error(f"Error opening icon picker: {e}")
     
     def on_icon_selected_from_picker(self, icon_path: str, *args: Any, **kwargs: Any) -> None:
-        self.icon_path_from_picker = icon_path
+        if not icon_path:
+            return
+        
+        # Normalize paths for comparison (resolve to absolute, remove trailing slashes)
+        try:
+            normalized_new_path = os.path.abspath(os.path.normpath(icon_path))
+        except Exception:
+            normalized_new_path = icon_path
+        
+        old_icon_path = self.icon_path_from_picker
+        if old_icon_path:
+            try:
+                normalized_old_path = os.path.abspath(os.path.normpath(old_icon_path))
+            except Exception:
+                normalized_old_path = old_icon_path
+        else:
+            normalized_old_path = None
+        
+        # Compare normalized paths
+        icon_changed = normalized_old_path != normalized_new_path
+        
+        # Save settings first
         settings = self.get_settings()
         settings["icon_path_from_picker"] = icon_path
         self.set_settings(settings)
         
-        # Clear last draw state to force redraw with new icon
-        self._last_draw_state = None
-        self.update_image()
+        # Update the icon path after settings are saved
+        self.icon_path_from_picker = icon_path
+        
+        # Clear old icon from cache if it was different
+        if old_icon_path and icon_changed and old_icon_path in self._icon_cache:
+            del self._icon_cache[old_icon_path]
+        
+        # Pre-load the new icon into cache to ensure it's ready (only if changed)
+        if icon_changed and icon_path and os.path.exists(icon_path):
+            try:
+                # Load icon into cache now so it's ready for rendering
+                self._get_icon()
+            except Exception:
+                pass
+        
+        # Update icon preview - load and scale to 20x20
+        if hasattr(self, 'icon_preview') and os.path.exists(icon_path):
+            try:
+                # Load and scale image to exactly 20x20 before setting
+                pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(
+                    icon_path,
+                    width=20,
+                    height=20,
+                    preserve_aspect_ratio=True
+                )
+                self.icon_preview.set_from_pixbuf(pixbuf)
+                self.icon_preview.set_visible(True)
+                icon_name = os.path.splitext(os.path.basename(icon_path))[0]
+                if hasattr(self, 'icon_row'):
+                    self.icon_row.set_subtitle(f"Selected: {icon_name}")
+            except Exception:
+                pass
+        
+        # Only trigger redraw if icon actually changed
+        # If icon didn't change, don't trigger redraw at all to avoid unnecessary updates
+        if icon_changed:
+            self._last_draw_state = None
+            self.update_image()
+        else:
+            # Icon is the same - ensure state is consistent by updating the icon path
+            # in the last draw state if it exists, but don't trigger a redraw
+            if hasattr(self, '_last_draw_state') and self._last_draw_state is not None:
+                # Update just the icon path in the state tuple (index 6)
+                state_list = list(self._last_draw_state)
+                state_list[6] = normalized_new_path
+                self._last_draw_state = tuple(state_list)
     
     def _get_icon(self) -> Optional[Image.Image]:
         if not self.icon_path_from_picker or not os.path.exists(self.icon_path_from_picker):
@@ -565,6 +881,14 @@ class PipeWeaverAction(ActionBase):
         except Exception:
             selected_mixes_tuple = tuple()
 
+        # Normalize icon path for state comparison
+        icon_path = getattr(self, "icon_path_from_picker", None)
+        if icon_path:
+            try:
+                icon_path = os.path.abspath(os.path.normpath(icon_path))
+            except Exception:
+                pass
+
         current_state = (
             self.selected_device_id,
             self.selected_device_type,
@@ -572,7 +896,9 @@ class PipeWeaverAction(ActionBase):
             getattr(self, "_current_meter_a", None),
             getattr(self, "_current_meter_target", None),
             getattr(self, "_is_muted", None),
-            getattr(self, "icon_path_from_picker", None),
+            icon_path,
+            getattr(self, "_meter_color", None),
+            getattr(self, "_volume_bar_color", None),
             selected_mixes_tuple,
             is_service_available(),
         )

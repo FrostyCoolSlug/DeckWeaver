@@ -36,9 +36,9 @@ IMAGE_WIDTH: Final[int] = 480
 IMAGE_HEIGHT: Final[int] = 240
 EDGE_PADDING: Final[int] = 10
 ICON_MAX_SIZE: Final[int] = 150
-BAR_HEIGHT: Final[int] = 24
+BAR_HEIGHT: Final[int] = 32
 BAR_RADIUS: Final[int] = 4
-METER_HEIGHT: Final[int] = 6
+METER_HEIGHT: Final[int] = 10
 METER_EDGE_INSET: Final[int] = 6
 
 # Font paths for monospace fonts

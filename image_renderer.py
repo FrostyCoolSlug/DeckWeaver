@@ -149,16 +149,6 @@ class ImageRenderer:
             'radius': BAR_RADIUS
         }
     
-    def _draw_volume_labels(
-        self,
-        draw: ImageDraw.ImageDraw,
-        start_x: int,
-        bar_y: int,
-        label_font: ImageFont.FreeTypeFont | ImageFont.ImageFont
-    ) -> None:
-        draw.text((start_x + 4, bar_y - 15), "VOL", fill=COLOR_LABEL, font=label_font)
-        draw.text((start_x + 4, bar_y + 24 + 12), "LVL", fill=COLOR_LABEL, font=label_font)
-    
     def _render_source_device(self, is_muted: bool = False) -> Optional[Image.Image]:
         device_color = getattr(self.action, "_device_color", {}) or {}
         volume_value = getattr(self.action, "volume", 0) or 0
@@ -168,10 +158,7 @@ class ImageRenderer:
             image = Image.new('RGBA', (layout['image_width'], layout['image_height']), (0, 0, 0, 0))
             draw = ImageDraw.Draw(image)
             
-            start_x = layout['left_margin']
-            label_font = self._load_monospace_font(12)
-            
-            self._draw_volume_labels(draw, start_x, layout['bar_y'], label_font)
+            start_x = layout['left_margin'] - 2
             
             self._draw_volume_bar(
                 draw, start_x, layout['bar_y'], layout['bar_width'], layout['bar_height'],
@@ -183,7 +170,7 @@ class ImageRenderer:
             if meter_value > 0 and bar_fill_width > 0:
                 self._draw_animated_meter(
                     draw, meter_value, bar_fill_width, start_x, layout['bar_width'],
-                    layout['bar_y'] + layout['bar_height'] - 9, METER_HEIGHT, layout['radius']
+                    layout['bar_y'] + layout['bar_height'] - METER_HEIGHT - 2, METER_HEIGHT, layout['radius']
                 )
 
             self._composite_icon(image, layout['icon_left_x'], layout['icon_bottom_y'], layout['icon_max_size'])
@@ -200,15 +187,18 @@ class ImageRenderer:
             image = Image.new('RGBA', (layout['image_width'], layout['image_height']), (0, 0, 0, 0))
             draw = ImageDraw.Draw(image)
             
-            bar_x = layout['left_margin']
+            bar_x = layout['left_margin'] - 2
             bar_fill_width = int((volume / 100.0) * layout['bar_width'])
-            label_font = self._load_monospace_font(12)
-            
-            self._draw_volume_labels(draw, bar_x, layout['bar_y'], label_font)
 
             bg_color = COLOR_MUTED_BG if muted else COLOR_TARGET_BG
             outline_color = COLOR_MUTED_OUTLINE if muted else COLOR_TARGET_OUTLINE
             fill_color = COLOR_MUTED_FILL if muted else COLOR_TARGET_FILL
+            
+            # Check for volume bar color override
+            volume_bar_color = getattr(self.action, "_volume_bar_color", None)
+            if volume_bar_color and not muted:
+                fill_color = volume_bar_color
+            
             radius = layout['bar_height'] // 2
 
             bar_bbox = (bar_x, layout['bar_y'], bar_x + layout['bar_width'], layout['bar_y'] + layout['bar_height'])
@@ -224,7 +214,7 @@ class ImageRenderer:
             if meter_value > 0 and bar_fill_width > 0:
                 self._draw_animated_meter(
                     draw, meter_value, bar_fill_width, bar_x, layout['bar_width'],
-                    layout['bar_y'] + layout['bar_height'] - 9, METER_HEIGHT, radius
+                    layout['bar_y'] + layout['bar_height'] - METER_HEIGHT - 2, METER_HEIGHT, radius
                 )
             
             self._composite_icon(image, layout['icon_left_x'], layout['icon_bottom_y'], layout['icon_max_size'])
@@ -327,7 +317,11 @@ class ImageRenderer:
         if is_muted:
             draw.rectangle([fill_x, fill_y, fill_x2, fill_y2], fill=COLOR_MUTED_FILL)
         else:
-            if device_color:
+            # Check for volume bar color override first
+            volume_bar_color = getattr(self.action, "_volume_bar_color", None)
+            if volume_bar_color:
+                color = volume_bar_color
+            elif device_color:
                 color = (device_color['red'], device_color['green'], device_color['blue'], 255)
             else:
                 color = fallback_color
@@ -358,9 +352,10 @@ class ImageRenderer:
         meter_x2_inset = min(meter_x2, start_x + bar_width - METER_EDGE_INSET)
 
         if meter_x2_inset > meter_x1_inset:
+            meter_color = getattr(self.action, "_meter_color", None) or COLOR_METER
             draw.rectangle(
                 [meter_x1_inset, meter_y, meter_x2_inset, meter_y + meter_height],
-                fill=COLOR_METER
+                fill=meter_color
             )
 
     def _composite_icon(
