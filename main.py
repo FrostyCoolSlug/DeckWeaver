@@ -1,40 +1,35 @@
 """Simplified main plugin class"""
-from src.backend.PluginManager.PluginBase import PluginBase
-from src.backend.PluginManager.ActionHolder import ActionHolder
-from src.backend.DeckManagement.InputIdentifier import Input
-from src.backend.PluginManager.ActionInputSupport import ActionInputSupport
-from loguru import logger as log
-import traceback
 import os
+from typing import Any
 
 import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
-from gi.repository import Gtk, Adw
+from gi.repository import Adw, Gtk
+from loguru import logger as log  # type: ignore
+
+from src.backend.DeckManagement.InputIdentifier import Input  # type: ignore
+from src.backend.PluginManager.ActionHolder import ActionHolder  # type: ignore
+from src.backend.PluginManager.ActionInputSupport import ActionInputSupport  # type: ignore
+from src.backend.PluginManager.PluginBase import PluginBase  # type: ignore
 
 from .knob_action import PipeWeaverKnobAction
 from .service_monitor import start_monitor, stop_monitor
 
 
 class DeckWeaver(PluginBase):
-    """Simplified main plugin class"""
-    
     def __init__(self):
         super().__init__()
         self.init_vars()
         self.load_and_apply_settings()
         self.load_devices()
         self.register_plugin()
-        
-        # Start the global PipeWeaver service monitor
         start_monitor()
     
-    def init_vars(self):
-        """Initialize variables"""
+    def init_vars(self) -> None:
         self.lm = self.locale_manager
     
-    def load_and_apply_settings(self):
-        """Load and apply language settings"""
+    def load_and_apply_settings(self) -> None:
         settings = self.get_settings()
         language = settings.get("language", "auto")
         
@@ -43,8 +38,7 @@ class DeckWeaver(PluginBase):
         else:
             self.lm.set_to_os_default()
     
-    def _set_language(self, language):
-        """Set language with fallback methods"""
+    def _set_language(self, language: str) -> None:
         try:
             self.lm.set_language(language)
         except AttributeError:
@@ -54,12 +48,9 @@ class DeckWeaver(PluginBase):
                 if hasattr(self.lm, 'language'):
                     self.lm.language = language
                 else:
-                    log.warning(f"Unable to set language to {language}")
                     self.lm.set_to_os_default()
-                    return
     
-    def register_plugin(self):
-        """Register the plugin"""
+    def register_plugin(self) -> None:
         self.register(
             plugin_name=self.lm.get("plugin.name"),
             github_repo="https://github.com/designgears/DeckWeaver",
@@ -67,17 +58,14 @@ class DeckWeaver(PluginBase):
             app_version="1.5.0-beta"
         )
     
-    def load_devices(self):
-        """Load and register actions"""
+    def load_devices(self) -> None:
         try:
             self.load_icon_assets()
             self._register_knob_action()
         except Exception as e:
             log.error(f"Error registering actions: {e}")
-            log.error(traceback.format_exc())
     
-    def _register_knob_action(self):
-        """Register knob action"""
+    def _register_knob_action(self) -> None:
         knob_holder = ActionHolder(
             plugin_base=self,
             action_base=PipeWeaverKnobAction,
@@ -86,13 +74,12 @@ class DeckWeaver(PluginBase):
             action_support={
                 Input.Key: ActionInputSupport.UNSUPPORTED,
                 Input.Dial: ActionInputSupport.SUPPORTED,
-                Input.Touchscreen: ActionInputSupport.SUPPORTED
+                Input.Touchscreen: ActionInputSupport.UNSUPPORTED
             }
         )
         self.add_action_holder(knob_holder)
     
-    def load_icon_assets(self):
-        """Load icon assets"""
+    def load_icon_assets(self) -> None:
         try:
             from src.backend.PluginManager.PluginSettings.Asset import Icon
             
@@ -109,12 +96,10 @@ class DeckWeaver(PluginBase):
                 if os.path.exists(icon_path):
                     icon = Icon(icon_path)
                     self.asset_manager.icons.add_asset(asset_name, icon)
-                    
         except Exception as e:
             log.warning(f"Could not load icon assets: {e}")
     
-    def get_settings_area(self):
-        """Create settings UI"""
+    def get_settings_area(self) -> Adw.PreferencesGroup:
         languages = [
             ("auto", self.lm.get("settings.language.name.auto")),
             ("en_US", self.lm.get("settings.language.name.en_US")),
@@ -144,8 +129,7 @@ class DeckWeaver(PluginBase):
         group.add(self.language_dropdown)
         return group
     
-    def on_language_changed(self, combo, data):
-        """Handle language change"""
+    def on_language_changed(self, combo: Adw.ComboRow, data: Any) -> None:
         selected_index = combo.get_selected()
         
         languages = [
@@ -158,17 +142,13 @@ class DeckWeaver(PluginBase):
 
         if selected_index < len(languages):
             selected_code, _ = languages[selected_index]
-            
             settings = self.get_settings()
             settings["language"] = selected_code
             self.set_settings(settings)
-            
             self.load_and_apply_settings()
     
-    def on_enable(self):
-        """Plugin enabled"""
+    def on_enable(self) -> None:
         pass
     
-    def on_disable(self):
-        """Plugin disabled"""
+    def on_disable(self) -> None:
         stop_monitor()
