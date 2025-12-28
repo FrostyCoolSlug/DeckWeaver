@@ -95,6 +95,7 @@ class PipeWeaverAction(ActionBase):
                 self._toggle_mute_source()
             else:
                 self._toggle_mute_target()
+            self.update_image()
         except Exception as e:
             log.error(f"Error toggling mute: {e}")
     

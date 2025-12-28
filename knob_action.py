@@ -14,4 +14,6 @@ class PipeWeaverKnobAction(PipeWeaverAction):
             self._set_volume_relative(-self.volume_step)
         elif str(event) == "Dial Short Up":
             self._toggle_mute()
+        elif event == Input.Dial.Events.SHORT_TOUCH_PRESS:
+            self._toggle_mute()
     

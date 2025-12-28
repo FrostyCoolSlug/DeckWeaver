@@ -74,7 +74,7 @@ class DeckWeaver(PluginBase):
             action_support={
                 Input.Key: ActionInputSupport.UNSUPPORTED,
                 Input.Dial: ActionInputSupport.SUPPORTED,
-                Input.Touchscreen: ActionInputSupport.UNSUPPORTED
+                Input.Touchscreen: ActionInputSupport.SUPPORTED
             }
         )
         self.add_action_holder(knob_holder)
