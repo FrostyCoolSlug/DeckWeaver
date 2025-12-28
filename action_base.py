@@ -66,6 +66,7 @@ class PipeWeaverAction(ActionBase):
         self._is_muted: bool = False
         self._meter_color: Optional[tuple[int, int, int, int]] = None
         self._volume_bar_color: Optional[tuple[int, int, int, int]] = None
+        self._meters_enabled: bool = True
         self.client: PipeWeaverWebSocketClient
         
         self._load_settings()
@@ -123,6 +124,9 @@ class PipeWeaverAction(ActionBase):
             self._volume_bar_color = tuple(int(c) for c in volume_bar_color)
         else:
             self._volume_bar_color = None
+        
+        # Load meters enabled setting (default to True for backward compatibility)
+        self._meters_enabled = settings.get("meters_enabled", True)
     
     def _load_devices(self) -> list[DeviceInfo]:
         if not self.client.connected:
@@ -268,45 +272,14 @@ class PipeWeaverAction(ActionBase):
         self.device_selector.connect("notify::selected-item", self.on_device_changed)
         self._populate_device_list()
         
-        # Add refresh button between label and dropdown
+        # Add refresh button to the right of the dropdown
         refresh_button = Gtk.Button(
             icon_name="view-refresh-symbolic",
             valign=Gtk.Align.CENTER,
             tooltip_text=self.plugin_base.lm.get("ui.refresh_devices.button")
         )
         refresh_button.connect("clicked", self.on_refresh_clicked)
-        
-        # Insert refresh button before the dropdown by accessing the internal box structure
-        def insert_refresh_button():
-            try:
-                # ComboRow extends ActionRow, which has a child Box
-                main_box = self.device_selector.get_child()
-                if main_box and isinstance(main_box, Gtk.Box):
-                    # Get the suffix box (last child, contains the dropdown)
-                    suffix_box = main_box.get_last_child()
-                    if suffix_box:
-                        # Insert the refresh button before the suffix box
-                        # Find the index of suffix_box and insert before it
-                        children = []
-                        child = main_box.get_first_child()
-                        while child:
-                            children.append(child)
-                            if child == suffix_box:
-                                break
-                            child = child.get_next_sibling()
-                        
-                        # Insert refresh button before suffix_box
-                        if suffix_box in children:
-                            suffix_index = children.index(suffix_box)
-                            # Insert at the position before suffix
-                            main_box.insert_child_after(refresh_button, children[suffix_index - 1] if suffix_index > 0 else None)
-            except Exception as e:
-                log.debug(f"Could not insert refresh button in custom position: {e}")
-                # Fallback: use suffix (will be after dropdown)
-                self.device_selector.add_suffix(refresh_button)
-        
-        # Use idle_add to ensure the widget is fully constructed
-        GLib.idle_add(insert_refresh_button)
+        self.device_selector.add_suffix(refresh_button)
         
         icon_row = Adw.ActionRow()
         icon_row.set_title(self.plugin_base.lm.get("ui.custom_icon.title"))
@@ -373,6 +346,13 @@ class PipeWeaverAction(ActionBase):
         meter_color_row.set_subtitle("Color for the audio level meter")
         
         meter_color_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        
+        # Add checkbox to enable/disable meters
+        self.meters_enabled_switch = Gtk.Switch(valign=Gtk.Align.CENTER)
+        self.meters_enabled_switch.set_active(getattr(self, "_meters_enabled", True))
+        self.meters_enabled_switch.connect("notify::active", self.on_meters_enabled_changed)
+        meter_color_box.append(self.meters_enabled_switch)
+        
         self.meter_color_button = Gtk.ColorButton(valign=Gtk.Align.CENTER)
         meter_color = getattr(self, "_meter_color", None) or COLOR_METER
         rgba = Gdk.RGBA()
@@ -382,12 +362,16 @@ class PipeWeaverAction(ActionBase):
         rgba.alpha = meter_color[3] / 255.0
         self.meter_color_button.set_rgba(rgba)
         self.meter_color_button.connect("color-set", self.on_meter_color_changed)
+        # Enable/disable color button based on meters enabled state
+        self.meter_color_button.set_sensitive(self._meters_enabled)
         meter_color_box.append(self.meter_color_button)
         
-        clear_meter_color_button = Gtk.Button(icon_name="edit-clear-symbolic", valign=Gtk.Align.CENTER)
-        clear_meter_color_button.set_tooltip_text("Reset to default")
-        clear_meter_color_button.connect("clicked", self.on_clear_meter_color_clicked)
-        meter_color_box.append(clear_meter_color_button)
+        self.clear_meter_color_button = Gtk.Button(icon_name="edit-clear-symbolic", valign=Gtk.Align.CENTER)
+        self.clear_meter_color_button.set_tooltip_text("Reset to default")
+        self.clear_meter_color_button.connect("clicked", self.on_clear_meter_color_clicked)
+        # Enable/disable clear button based on meters enabled state
+        self.clear_meter_color_button.set_sensitive(self._meters_enabled)
+        meter_color_box.append(self.clear_meter_color_button)
         
         meter_color_row.add_suffix(meter_color_box)
 
@@ -516,6 +500,30 @@ class PipeWeaverAction(ActionBase):
         settings["volume_step"] = volume_step
         self.set_settings(settings)
         self.volume_step = volume_step
+    
+    def on_meters_enabled_changed(self, switch: Gtk.Switch, *args: Any) -> None:
+        self._meters_enabled = switch.get_active()
+        settings = self.get_settings()
+        settings["meters_enabled"] = self._meters_enabled
+        self.set_settings(settings)
+        
+        # Enable/disable color button and clear button based on meters enabled state
+        if hasattr(self, 'meter_color_button'):
+            self.meter_color_button.set_sensitive(self._meters_enabled)
+        if hasattr(self, 'clear_meter_color_button'):
+            self.clear_meter_color_button.set_sensitive(self._meters_enabled)
+        
+        # Start/stop meter client based on enabled state
+        if self._meters_enabled:
+            self._start_meter_client()
+        else:
+            # Reset meter values when disabled
+            self._current_meter_a = 0
+            self._current_meter_target = 0
+            self._stop_meter_client()
+        
+        self._last_draw_state = None
+        self.update_image()
     
     def on_meter_color_changed(self, button: Gtk.ColorButton) -> None:
         rgba = button.get_rgba()
@@ -838,6 +846,10 @@ class PipeWeaverAction(ActionBase):
             self.update_image()
     
     def _meter_callback(self, node_id: str, percent: int) -> None:
+        # Skip processing if meters are disabled
+        if not getattr(self, "_meters_enabled", True):
+            return
+        
         if node_id != self.selected_device_id:
             return
 
@@ -849,6 +861,9 @@ class PipeWeaverAction(ActionBase):
         self.update_image()
     
     def _start_meter_client(self):
+        # Don't start if meters are disabled
+        if not getattr(self, "_meters_enabled", True):
+            return
         try:
             if self._meter_client is None:
                 self._meter_client = acquire_shared_meter_client(self._meter_callback)

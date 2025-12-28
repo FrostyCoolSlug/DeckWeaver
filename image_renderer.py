@@ -167,7 +167,8 @@ class ImageRenderer:
             
             bar_fill_width = int((volume_value / 100.0) * layout['bar_width'])
             meter_value = self.action._current_meter_a
-            if meter_value > 0 and bar_fill_width > 0:
+            meters_enabled = getattr(self.action, "_meters_enabled", True)
+            if meters_enabled and meter_value > 0 and bar_fill_width > 0:
                 self._draw_animated_meter(
                     draw, meter_value, bar_fill_width, start_x, layout['bar_width'],
                     layout['bar_y'] + layout['bar_height'] - METER_HEIGHT - 2, METER_HEIGHT, layout['radius']
@@ -211,7 +212,8 @@ class ImageRenderer:
                 self._draw_rounded_rect(draw, fill_bbox, max(0, radius - 2), fill_color)
             
             meter_value = self.action._current_meter_target
-            if meter_value > 0 and bar_fill_width > 0:
+            meters_enabled = getattr(self.action, "_meters_enabled", True)
+            if meters_enabled and meter_value > 0 and bar_fill_width > 0:
                 self._draw_animated_meter(
                     draw, meter_value, bar_fill_width, bar_x, layout['bar_width'],
                     layout['bar_y'] + layout['bar_height'] - METER_HEIGHT - 2, METER_HEIGHT, radius
@@ -348,7 +350,7 @@ class ImageRenderer:
         if meter_x2 <= meter_x1 or meter_y < 0:
             return
 
-        meter_x1_inset = max(meter_x1, start_x + METER_EDGE_INSET)
+        meter_x1_inset = max(meter_x1, start_x + 2)
         meter_x2_inset = min(meter_x2, start_x + bar_width - METER_EDGE_INSET)
 
         if meter_x2_inset > meter_x1_inset:
