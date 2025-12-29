@@ -37,7 +37,6 @@ class ImageRenderer:
     def __init__(self, action):
         self.action = action
         self._font_cache = {}
-        self._icon_cache_local = {}
     
     def render_image(self):
         if not is_service_available():
@@ -53,7 +52,7 @@ class ImageRenderer:
             return
         
         try:
-            is_muted = getattr(self.action, "_is_muted", False)
+            is_muted = self.action._is_muted
             if self.action.selected_device_type == DEVICE_TYPE_SOURCE:
                 image = self._render_source_device(is_muted)
             else:
@@ -150,8 +149,8 @@ class ImageRenderer:
         }
     
     def _render_source_device(self, is_muted: bool = False) -> Optional[Image.Image]:
-        device_color = getattr(self.action, "_device_color", {}) or {}
-        volume_value = getattr(self.action, "volume", 0) or 0
+        device_color = self.action._device_color or {}
+        volume_value = self.action.volume or 0
         
         try:
             layout = self._get_layout_constants()
@@ -167,8 +166,7 @@ class ImageRenderer:
             
             bar_fill_width = int((volume_value / 100.0) * layout['bar_width'])
             meter_value = self.action._current_meter_a
-            meters_enabled = getattr(self.action, "_meters_enabled", True)
-            if meters_enabled and meter_value > 0 and bar_fill_width > 0:
+            if self.action._meters_enabled and meter_value > 0 and bar_fill_width > 0:
                 self._draw_animated_meter(
                     draw, meter_value, bar_fill_width, start_x, layout['bar_width'],
                     layout['bar_y'] + layout['bar_height'] - METER_HEIGHT - 2, METER_HEIGHT, layout['radius']
@@ -181,7 +179,7 @@ class ImageRenderer:
             return None
     
     def _render_target_device(self, muted: bool = False) -> Optional[Image.Image]:
-        volume = getattr(self.action, "volume", 0) or 0
+        volume = self.action.volume or 0
         
         try:
             layout = self._get_layout_constants()
@@ -195,8 +193,7 @@ class ImageRenderer:
             outline_color = COLOR_MUTED_OUTLINE if muted else COLOR_TARGET_OUTLINE
             fill_color = COLOR_MUTED_FILL if muted else COLOR_TARGET_FILL
             
-            # Check for volume bar color override
-            volume_bar_color = getattr(self.action, "_volume_bar_color", None)
+            volume_bar_color = self.action._volume_bar_color
             if volume_bar_color and not muted:
                 fill_color = volume_bar_color
             
@@ -212,8 +209,7 @@ class ImageRenderer:
                 self._draw_rounded_rect(draw, fill_bbox, max(0, radius - 2), fill_color)
             
             meter_value = self.action._current_meter_target
-            meters_enabled = getattr(self.action, "_meters_enabled", True)
-            if meters_enabled and meter_value > 0 and bar_fill_width > 0:
+            if self.action._meters_enabled and meter_value > 0 and bar_fill_width > 0:
                 self._draw_animated_meter(
                     draw, meter_value, bar_fill_width, bar_x, layout['bar_width'],
                     layout['bar_y'] + layout['bar_height'] - METER_HEIGHT - 2, METER_HEIGHT, radius
@@ -319,8 +315,7 @@ class ImageRenderer:
         if is_muted:
             draw.rectangle([fill_x, fill_y, fill_x2, fill_y2], fill=COLOR_MUTED_FILL)
         else:
-            # Check for volume bar color override first
-            volume_bar_color = getattr(self.action, "_volume_bar_color", None)
+            volume_bar_color = self.action._volume_bar_color
             if volume_bar_color:
                 color = volume_bar_color
             elif device_color:
@@ -354,7 +349,7 @@ class ImageRenderer:
         meter_x2_inset = min(meter_x2, start_x + bar_width - METER_EDGE_INSET)
 
         if meter_x2_inset > meter_x1_inset:
-            meter_color = getattr(self.action, "_meter_color", None) or COLOR_METER
+            meter_color = self.action._meter_color or COLOR_METER
             draw.rectangle(
                 [meter_x1_inset, meter_y, meter_x2_inset, meter_y + meter_height],
                 fill=meter_color
@@ -387,6 +382,11 @@ class ImageRenderer:
     def _set_image_on_action(self, image: Image.Image) -> None:
         try:
             image.load()
-            self.action.set_media(image=image)
+            self.action.set_media(image=image, update=True)
+            
+            # Workaround: call update again to force hardware sync
+            dial = self.action.get_input()
+            if dial:
+                dial.update()
         except Exception as e:
             log.error(f"Error setting image: {e}")

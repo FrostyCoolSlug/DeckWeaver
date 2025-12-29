@@ -56,7 +56,6 @@ class PipeWeaverAction(ActionBase):
         self.volume_step: int = DEFAULT_VOLUME_STEP
         self._is_initializing: bool = True
         self._device_color: dict[str, Any] = {}
-        self._render_idle_source: Optional[int] = None
         self._last_draw_state: Optional[tuple[Any, ...]] = None
         self.icon_path_from_picker: Optional[str] = None
         self._icon_cache: dict[str, Image.Image] = {}
@@ -81,27 +80,14 @@ class PipeWeaverAction(ActionBase):
         devices_tree = get_devices_tree(status_data)
         return get_device_by_id(devices_tree, device_id, device_type)
     
-    def _toggle_mute_source(self) -> None:
-        if self._is_muted:
-            self.client.unmute_device(self.selected_device_id)
-        else:
-            self.client.mute_device(self.selected_device_id)
-    
-    def _toggle_mute_target(self) -> None:
-        if self._is_muted:
-            self.client.unmute_device(self.selected_device_id)
-        else:
-            self.client.mute_device(self.selected_device_id)
-    
     def _toggle_mute(self) -> None:
         if not self.selected_device_id:
             return
         try:
-            if self.selected_device_type == DEVICE_TYPE_SOURCE:
-                self._toggle_mute_source()
+            if self._is_muted:
+                self.client.unmute_device(self.selected_device_id)
             else:
-                self._toggle_mute_target()
-            self.update_image()
+                self.client.mute_device(self.selected_device_id)
         except Exception as e:
             log.error(f"Error toggling mute: {e}")
     
@@ -157,35 +143,43 @@ class PipeWeaverAction(ActionBase):
         if self.devices:
             self._set_selected_device(self.devices[0], settings)
     
-    def _update_device_from_api(self) -> None:
+    def _update_device_from_api(self, status_data: Optional[dict[str, Any]] = None) -> None:
         try:
-            status_data = self.client._get_status()
+            if status_data is None:
+                status_data = self.client._get_status()
             if not status_data:
                 self._device_color = {}
                 self._is_muted = False
+                self._last_draw_state = None
                 self._update_volume_bar_color_button()
                 return
             
-            device_data = self._get_device_by_id(self.selected_device_id, self.selected_device_type)
+            devices_tree = get_devices_tree(status_data)
+            device_data = get_device_by_id(devices_tree, self.selected_device_id, self.selected_device_type)
             if device_data:
                 desc = device_data.get("description", {})
                 color = desc.get("colour", {})
                 self._device_color = color if isinstance(color, dict) else {}
                 
+                old_muted = self._is_muted
                 if self.selected_device_type == DEVICE_TYPE_SOURCE:
                     mute_states = device_data.get("mute_states", {}).get("mute_state", [])
                     self._is_muted = "TargetA" in mute_states
                 else:
                     self._is_muted = device_data.get("mute_state") == "Muted"
+                
+                if old_muted != self._is_muted:
+                    self._last_draw_state = None
             else:
                 self._device_color = {}
                 self._is_muted = False
+                self._last_draw_state = None
             
-            # Update volume bar color button if no override is set
             self._update_volume_bar_color_button()
         except Exception:
             self._device_color = {}
             self._is_muted = False
+            self._last_draw_state = None
             self._update_volume_bar_color_button()
     
     def _update_volume_bar_color_button(self) -> None:
@@ -223,6 +217,7 @@ class PipeWeaverAction(ActionBase):
         self.selected_device_type = device['type']
         self._reset_meter_values()
         self._update_device_from_api()
+        self._last_draw_state = None  # Force redraw on next update_image() call
         
         if saved_device_id != device['id']:
             settings['device_id'] = device['id']
@@ -803,7 +798,6 @@ class PipeWeaverAction(ActionBase):
 
         self._load_settings()
         self._last_draw_state = None
-        self._render_idle_source = None
         self.update_image()
     
     def on_ready(self):
@@ -882,10 +876,11 @@ class PipeWeaverAction(ActionBase):
         if not self.selected_device_id:
             return
         try:
-            device_data = self._get_device_by_id(self.selected_device_id, self.selected_device_type)
+            devices_tree = get_devices_tree(status)
+            device_data = get_device_by_id(devices_tree, self.selected_device_id, self.selected_device_type)
             if device_data:
                 self.volume = self._extract_volume_from_device_data(device_data)
-                self._update_device_from_api()
+                self._update_device_from_api(status)
                 self.update_image()
         except Exception as e:
             log.error(f"Error handling patch update: {e}")
@@ -896,8 +891,7 @@ class PipeWeaverAction(ActionBase):
         except Exception:
             selected_mixes_tuple = tuple()
 
-        # Normalize icon path for state comparison
-        icon_path = getattr(self, "icon_path_from_picker", None)
+        icon_path = self.icon_path_from_picker
         if icon_path:
             try:
                 icon_path = os.path.abspath(os.path.normpath(icon_path))
@@ -907,50 +901,28 @@ class PipeWeaverAction(ActionBase):
         current_state = (
             self.selected_device_id,
             self.selected_device_type,
-            getattr(self, "volume", None),
-            getattr(self, "_current_meter_a", None),
-            getattr(self, "_current_meter_target", None),
-            getattr(self, "_is_muted", None),
+            self.volume,
+            self._current_meter_a,
+            self._current_meter_target,
+            self._is_muted,
             icon_path,
-            getattr(self, "_meter_color", None),
-            getattr(self, "_volume_bar_color", None),
+            self._meter_color,
+            self._volume_bar_color,
             selected_mixes_tuple,
             is_service_available(),
         )
 
-        if getattr(self, "_last_draw_state", None) == current_state:
+        if self._last_draw_state == current_state:
             return
 
-        if getattr(self, "_render_idle_source", None) is not None:
-            return
+        self._last_draw_state = current_state
 
-        def _do_render(state_snapshot=current_state):
-            render_success = False
-            try:
-                if hasattr(self, 'set_top_label'):
-                    device_name = self.selected_device_name[:25] if self.selected_device_name else "Unknown"
-                    self.set_top_label(device_name, font_size=14)
+        try:
+            if hasattr(self, 'set_top_label'):
+                device_name = self.selected_device_name[:25] if self.selected_device_name else "Unknown"
+                self.set_top_label(device_name, font_size=14)
 
-                if not hasattr(self, '_image_renderer'):
-                    self._image_renderer = ImageRenderer(self)
-                self._image_renderer.render_image()
-                render_success = True
-            except Exception as e:
-                log.error(f"Error rendering image: {e}")
-                try:
-                    if not is_service_available():
-                        if not hasattr(self, '_image_renderer'):
-                            self._image_renderer = ImageRenderer(self)
-                        image = self._image_renderer._render_service_unavailable()
-                        if image:
-                            self._image_renderer._set_image_on_action(image)
-                            render_success = True
-                except Exception:
-                    pass
-            finally:
-                self._render_idle_source = None
-                if render_success:
-                    self._last_draw_state = state_snapshot
-            return False
-
-        self._render_idle_source = GLib.idle_add(_do_render)
+            image_renderer = ImageRenderer(self)
+            image_renderer.render_image()
+        except Exception as e:
+            log.error(f"Error rendering image: {e}")
