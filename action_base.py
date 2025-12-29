@@ -917,12 +917,17 @@ class PipeWeaverAction(ActionBase):
 
         self._last_draw_state = current_state
 
-        try:
-            if hasattr(self, 'set_top_label'):
-                device_name = self.selected_device_name[:25] if self.selected_device_name else "Unknown"
-                self.set_top_label(device_name, font_size=14)
+        def _do_render():
+            try:
+                if hasattr(self, 'set_top_label'):
+                    device_name = self.selected_device_name[:25] if self.selected_device_name else "Unknown"
+                    self.set_top_label(device_name, font_size=14)
 
-            image_renderer = ImageRenderer(self)
-            image_renderer.render_image()
-        except Exception as e:
-            log.error(f"Error rendering image: {e}")
+                image_renderer = ImageRenderer(self)
+                image_renderer.render_image()
+            except Exception as e:
+                log.error(f"Error rendering image: {e}")
+            return False  # Don't repeat
+
+        # Schedule render on main thread
+        GLib.idle_add(_do_render)
