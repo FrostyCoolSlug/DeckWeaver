@@ -98,7 +98,6 @@ class PipeWeaverAction(ActionBase):
         self.volume_step = settings.get('volume_step', DEFAULT_VOLUME_STEP)
         self.icon_path_from_picker = settings.get("icon_path_from_picker")
         
-        # Load color settings
         meter_color = settings.get("meter_color")
         if meter_color and isinstance(meter_color, (list, tuple)) and len(meter_color) == 4:
             self._meter_color = tuple(int(c) for c in meter_color)
@@ -187,11 +186,9 @@ class PipeWeaverAction(ActionBase):
         if not hasattr(self, 'volume_bar_color_button'):
             return
         
-        # Only update if there's no override
         if getattr(self, "_volume_bar_color", None) is not None:
             return
         
-        # Use device color from API
         device_color = getattr(self, "_device_color", {}) or {}
         if device_color and 'red' in device_color and 'green' in device_color and 'blue' in device_color:
             rgba = Gdk.RGBA()
@@ -201,7 +198,6 @@ class PipeWeaverAction(ActionBase):
             rgba.alpha = 1.0
             self.volume_bar_color_button.set_rgba(rgba)
         else:
-            # Fallback to white if no device color
             rgba = Gdk.RGBA()
             rgba.red = 1.0
             rgba.green = 1.0
@@ -217,7 +213,7 @@ class PipeWeaverAction(ActionBase):
         self.selected_device_type = device['type']
         self._reset_meter_values()
         self._update_device_from_api()
-        self._last_draw_state = None  # Force redraw on next update_image() call
+        self._last_draw_state = None
         
         if saved_device_id != device['id']:
             settings['device_id'] = device['id']
@@ -239,22 +235,15 @@ class PipeWeaverAction(ActionBase):
         return volume
     
     def get_config_rows(self):
-        self._ensure_connection_and_load_devices()
-        
-        test_devices = []
-        if self.client.connected:
-            for _ in range(3):
-                test_devices = self._load_devices()
-                if test_devices:
-                    break
-                time.sleep(0.2)
-        
-        if not test_devices:
+        # Use the centralized service monitor for detection
+        if not is_service_available():
             error_row = Adw.ActionRow()
             error_row.set_title(self.plugin_base.lm.get("ui.error.not_running.title"))
             error_row.set_subtitle(self.plugin_base.lm.get("ui.error.not_running.subtitle"))
             error_row.add_css_class("warning")
             return [error_row]
+        
+        self._ensure_connection_and_load_devices()
         
         self._load_settings()
         
@@ -281,7 +270,6 @@ class PipeWeaverAction(ActionBase):
         
         icon_content_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12, valign=Gtk.Align.CENTER)
         
-        # Show selected icon preview - use Gtk.Image with pre-scaled pixbuf to enforce 20x20 max
         self.icon_preview = Gtk.Image()
         self.icon_preview.set_size_request(20, 20)
         self.icon_preview.set_hexpand(False)
@@ -290,7 +278,6 @@ class PipeWeaverAction(ActionBase):
         
         if self.icon_path_from_picker and os.path.exists(self.icon_path_from_picker):
             try:
-                # Load and scale image to exactly 20x20 before setting
                 pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(
                     self.icon_path_from_picker,
                     width=20,
@@ -307,7 +294,7 @@ class PipeWeaverAction(ActionBase):
             icon_row.set_subtitle("Select an icon from StreamController's icon packs")
             self.icon_preview.set_visible(False)
         
-        self.icon_preview_container = self.icon_preview  # Store reference for visibility updates
+        self.icon_preview_container = self.icon_preview
         
         icon_content_box.append(self.icon_preview)
         
@@ -342,7 +329,6 @@ class PipeWeaverAction(ActionBase):
         
         meter_color_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         
-        # Add checkbox to enable/disable meters
         self.meters_enabled_switch = Gtk.Switch(valign=Gtk.Align.CENTER)
         self.meters_enabled_switch.set_active(getattr(self, "_meters_enabled", True))
         self.meters_enabled_switch.connect("notify::active", self.on_meters_enabled_changed)
@@ -357,14 +343,12 @@ class PipeWeaverAction(ActionBase):
         rgba.alpha = meter_color[3] / 255.0
         self.meter_color_button.set_rgba(rgba)
         self.meter_color_button.connect("color-set", self.on_meter_color_changed)
-        # Enable/disable color button based on meters enabled state
         self.meter_color_button.set_sensitive(self._meters_enabled)
         meter_color_box.append(self.meter_color_button)
         
         self.clear_meter_color_button = Gtk.Button(icon_name="edit-clear-symbolic", valign=Gtk.Align.CENTER)
         self.clear_meter_color_button.set_tooltip_text("Reset to default")
         self.clear_meter_color_button.connect("clicked", self.on_clear_meter_color_clicked)
-        # Enable/disable clear button based on meters enabled state
         self.clear_meter_color_button.set_sensitive(self._meters_enabled)
         meter_color_box.append(self.clear_meter_color_button)
         
@@ -377,10 +361,8 @@ class PipeWeaverAction(ActionBase):
         volume_bar_color_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         self.volume_bar_color_button = Gtk.ColorButton(valign=Gtk.Align.CENTER)
         
-        # Load color: use override if set, otherwise use device color from API
         volume_bar_color = getattr(self, "_volume_bar_color", None)
         if not volume_bar_color:
-            # No override, use device color from API
             device_color = getattr(self, "_device_color", {}) or {}
             if device_color and 'red' in device_color and 'green' in device_color and 'blue' in device_color:
                 rgba = Gdk.RGBA()
@@ -390,7 +372,6 @@ class PipeWeaverAction(ActionBase):
                 rgba.alpha = 1.0
                 self.volume_bar_color_button.set_rgba(rgba)
             else:
-                # Fallback to white if no device color
                 rgba = Gdk.RGBA()
                 rgba.red = 1.0
                 rgba.green = 1.0
@@ -398,7 +379,6 @@ class PipeWeaverAction(ActionBase):
                 rgba.alpha = 1.0
                 self.volume_bar_color_button.set_rgba(rgba)
         else:
-            # Use override
             rgba = Gdk.RGBA()
             rgba.red = volume_bar_color[0] / 255.0
             rgba.green = volume_bar_color[1] / 255.0
@@ -502,17 +482,14 @@ class PipeWeaverAction(ActionBase):
         settings["meters_enabled"] = self._meters_enabled
         self.set_settings(settings)
         
-        # Enable/disable color button and clear button based on meters enabled state
         if hasattr(self, 'meter_color_button'):
             self.meter_color_button.set_sensitive(self._meters_enabled)
         if hasattr(self, 'clear_meter_color_button'):
             self.clear_meter_color_button.set_sensitive(self._meters_enabled)
         
-        # Start/stop meter client based on enabled state
         if self._meters_enabled:
             self._start_meter_client()
         else:
-            # Reset meter values when disabled
             self._current_meter_a = 0
             self._current_meter_target = 0
             self._stop_meter_client()
@@ -541,7 +518,6 @@ class PipeWeaverAction(ActionBase):
         self.set_settings(settings)
         self._last_draw_state = None
         self.update_image()
-        # Reset the color button to show default color
         if hasattr(self, 'meter_color_button'):
             rgba = Gdk.RGBA()
             rgba.red = COLOR_METER[0] / 255.0
@@ -571,7 +547,6 @@ class PipeWeaverAction(ActionBase):
         self.set_settings(settings)
         self._last_draw_state = None
         self.update_image()
-        # Show the device color from API in the color button
         if hasattr(self, 'volume_bar_color_button'):
             device_color = getattr(self, "_device_color", {}) or {}
             if device_color and 'red' in device_color and 'green' in device_color and 'blue' in device_color:
@@ -582,7 +557,6 @@ class PipeWeaverAction(ActionBase):
                 rgba.alpha = 1.0
                 self.volume_bar_color_button.set_rgba(rgba)
             else:
-                # Fallback to white if no device color
                 rgba = Gdk.RGBA()
                 rgba.red = 1.0
                 rgba.green = 1.0
@@ -597,7 +571,6 @@ class PipeWeaverAction(ActionBase):
         self._icon_cache.clear()
         self.set_settings(settings)
         
-        # Update icon preview
         if hasattr(self, 'icon_preview'):
             self.icon_preview.set_visible(False)
             if hasattr(self, 'icon_row'):
@@ -625,7 +598,6 @@ class PipeWeaverAction(ActionBase):
         if not icon_path:
             return
         
-        # Normalize paths for comparison (resolve to absolute, remove trailing slashes)
         try:
             normalized_new_path = os.path.abspath(os.path.normpath(icon_path))
         except Exception:
@@ -640,33 +612,25 @@ class PipeWeaverAction(ActionBase):
         else:
             normalized_old_path = None
         
-        # Compare normalized paths
         icon_changed = normalized_old_path != normalized_new_path
         
-        # Save settings first
         settings = self.get_settings()
         settings["icon_path_from_picker"] = icon_path
         self.set_settings(settings)
         
-        # Update the icon path after settings are saved
         self.icon_path_from_picker = icon_path
         
-        # Clear old icon from cache if it was different
         if old_icon_path and icon_changed and old_icon_path in self._icon_cache:
             del self._icon_cache[old_icon_path]
         
-        # Pre-load the new icon into cache to ensure it's ready (only if changed)
         if icon_changed and icon_path and os.path.exists(icon_path):
             try:
-                # Load icon into cache now so it's ready for rendering
                 self._get_icon()
             except Exception:
                 pass
         
-        # Update icon preview - load and scale to 20x20
         if hasattr(self, 'icon_preview') and os.path.exists(icon_path):
             try:
-                # Load and scale image to exactly 20x20 before setting
                 pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(
                     icon_path,
                     width=20,
@@ -681,16 +645,11 @@ class PipeWeaverAction(ActionBase):
             except Exception:
                 pass
         
-        # Only trigger redraw if icon actually changed
-        # If icon didn't change, don't trigger redraw at all to avoid unnecessary updates
         if icon_changed:
             self._last_draw_state = None
             self.update_image()
         else:
-            # Icon is the same - ensure state is consistent by updating the icon path
-            # in the last draw state if it exists, but don't trigger a redraw
             if hasattr(self, '_last_draw_state') and self._last_draw_state is not None:
-                # Update just the icon path in the state tuple (index 6)
                 state_list = list(self._last_draw_state)
                 state_list[6] = normalized_new_path
                 self._last_draw_state = tuple(state_list)
@@ -840,7 +799,6 @@ class PipeWeaverAction(ActionBase):
             self.update_image()
     
     def _meter_callback(self, node_id: str, percent: int) -> None:
-        # Skip processing if meters are disabled
         if not getattr(self, "_meters_enabled", True):
             return
         
@@ -855,7 +813,6 @@ class PipeWeaverAction(ActionBase):
         self.update_image()
     
     def _start_meter_client(self):
-        # Don't start if meters are disabled
         if not getattr(self, "_meters_enabled", True):
             return
         try:
@@ -927,7 +884,6 @@ class PipeWeaverAction(ActionBase):
                 image_renderer.render_image()
             except Exception as e:
                 log.error(f"Error rendering image: {e}")
-            return False  # Don't repeat
+            return False
 
-        # Schedule render on main thread
         GLib.idle_add(_do_render)

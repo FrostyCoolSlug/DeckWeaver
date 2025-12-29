@@ -7,20 +7,13 @@ from loguru import logger as log  # type: ignore
 from .constants import (
     BAR_HEIGHT,
     BAR_RADIUS,
-    COLOR_BACKGROUND_DARK,
-    COLOR_LABEL,
     COLOR_METER,
-    COLOR_MUTED_BG,
     COLOR_MUTED_FILL,
-    COLOR_MUTED_OUTLINE,
-    COLOR_OUTLINE_GRAY,
     COLOR_SERVICE_UNAVAILABLE_BG,
     COLOR_SERVICE_UNAVAILABLE_HINT,
     COLOR_SERVICE_UNAVAILABLE_TEXT,
     COLOR_SOURCE_FILL,
-    COLOR_TARGET_BG,
     COLOR_TARGET_FILL,
-    COLOR_TARGET_OUTLINE,
     DEVICE_TYPE_SOURCE,
     EDGE_PADDING,
     ICON_MAX_SIZE,
@@ -148,38 +141,16 @@ class ImageRenderer:
             'radius': BAR_RADIUS
         }
     
-    def _render_source_device(self, is_muted: bool = False) -> Optional[Image.Image]:
-        device_color = self.action._device_color or {}
-        volume_value = self.action.volume or 0
-        
-        try:
-            layout = self._get_layout_constants()
-            image = Image.new('RGBA', (layout['image_width'], layout['image_height']), (0, 0, 0, 0))
-            draw = ImageDraw.Draw(image)
-            
-            start_x = layout['left_margin'] - 2
-            
-            self._draw_volume_bar(
-                draw, start_x, layout['bar_y'], layout['bar_width'], layout['bar_height'],
-                volume_value, is_muted, device_color, COLOR_SOURCE_FILL
-            )
-            
-            bar_fill_width = int((volume_value / 100.0) * layout['bar_width'])
-            meter_value = self.action._current_meter_a
-            if self.action._meters_enabled and meter_value > 0 and bar_fill_width > 0:
-                self._draw_animated_meter(
-                    draw, meter_value, bar_fill_width, start_x, layout['bar_width'],
-                    layout['bar_y'] + layout['bar_height'] - METER_HEIGHT - 2, METER_HEIGHT, layout['radius']
-                )
-
-            self._composite_icon(image, layout['icon_left_x'], layout['icon_bottom_y'], layout['icon_max_size'])
-            return image
-        except Exception as img_e:
-            log.error(f"Error creating source device image: {img_e}")
-            return None
-    
-    def _render_target_device(self, muted: bool = False) -> Optional[Image.Image]:
+    def _render_device(self, is_muted: bool = False) -> Optional[Image.Image]:
+        """Unified rendering for both source and target devices."""
         volume = self.action.volume or 0
+        device_color = self.action._device_color or {}
+        is_source = self.action.selected_device_type == DEVICE_TYPE_SOURCE
+        
+        CONTAINER_BG = (30, 30, 30, 255)
+        CONTAINER_OUTLINE = (80, 80, 80, 255)
+        CONTAINER_OUTLINE_MUTED = (60, 60, 60, 255)
+        BORDER_WIDTH = 3
         
         try:
             layout = self._get_layout_constants()
@@ -188,38 +159,66 @@ class ImageRenderer:
             
             bar_x = layout['left_margin'] - 2
             bar_fill_width = int((volume / 100.0) * layout['bar_width'])
-
-            bg_color = COLOR_MUTED_BG if muted else COLOR_TARGET_BG
-            outline_color = COLOR_MUTED_OUTLINE if muted else COLOR_TARGET_OUTLINE
-            fill_color = COLOR_MUTED_FILL if muted else COLOR_TARGET_FILL
-            
-            volume_bar_color = self.action._volume_bar_color
-            if volume_bar_color and not muted:
-                fill_color = volume_bar_color
-            
             radius = layout['bar_height'] // 2
 
-            bar_bbox = (bar_x, layout['bar_y'], bar_x + layout['bar_width'], layout['bar_y'] + layout['bar_height'])
-            self._draw_rounded_rect(draw, bar_bbox, radius, bg_color)
-            self._draw_rounded_rect_outline(draw, bar_bbox, radius, outline_color, 2)
-
-            if bar_fill_width > 0:
-                fill_bbox = (bar_x + 2, layout['bar_y'] + 2, bar_x + min(bar_fill_width, layout['bar_width'] - 2), 
-                           layout['bar_y'] + layout['bar_height'] - 2)
-                self._draw_rounded_rect(draw, fill_bbox, max(0, radius - 2), fill_color)
+            bg_color = CONTAINER_BG
+            outline_color = CONTAINER_OUTLINE_MUTED if is_muted else CONTAINER_OUTLINE
             
-            meter_value = self.action._current_meter_target
+            if is_muted:
+                fill_color = COLOR_MUTED_FILL
+            else:
+                volume_bar_color = self.action._volume_bar_color
+                if volume_bar_color:
+                    fill_color = volume_bar_color
+                elif device_color:
+                    fill_color = (device_color.get('red', 0), device_color.get('green', 0), 
+                                  device_color.get('blue', 0), 255)
+                else:
+                    fill_color = COLOR_SOURCE_FILL if is_source else COLOR_TARGET_FILL
+
+            bar_bbox = (bar_x, layout['bar_y'], bar_x + layout['bar_width'], layout['bar_y'] + layout['bar_height'])
+            
+            self._draw_rounded_rect(draw, bar_bbox, radius, outline_color)
+            
+            inner_bbox = (bar_x + BORDER_WIDTH, layout['bar_y'] + BORDER_WIDTH, 
+                         bar_x + layout['bar_width'] - BORDER_WIDTH, 
+                         layout['bar_y'] + layout['bar_height'] - BORDER_WIDTH)
+            inner_radius = max(0, radius - BORDER_WIDTH)
+            self._draw_rounded_rect(draw, inner_bbox, inner_radius, bg_color)
+
+            fill_inset = BORDER_WIDTH + 1
+            if bar_fill_width > fill_inset * 2:
+                effective_bar_width = layout['bar_width'] - fill_inset * 2
+                effective_fill_width = int((volume / 100.0) * effective_bar_width)
+                
+                if effective_fill_width > 0:
+                    fill_bbox = (bar_x + fill_inset, 
+                               layout['bar_y'] + fill_inset, 
+                               bar_x + fill_inset + effective_fill_width, 
+                               layout['bar_y'] + layout['bar_height'] - fill_inset)
+                    fill_radius = max(0, radius - fill_inset)
+                    self._draw_rounded_rect(draw, fill_bbox, fill_radius, fill_color)
+            
+            meter_value = self.action._current_meter_a if is_source else self.action._current_meter_target
             if self.action._meters_enabled and meter_value > 0 and bar_fill_width > 0:
                 self._draw_animated_meter(
-                    draw, meter_value, bar_fill_width, bar_x, layout['bar_width'],
-                    layout['bar_y'] + layout['bar_height'] - METER_HEIGHT - 2, METER_HEIGHT, radius
+                    draw, meter_value, bar_fill_width, bar_x + fill_inset, 
+                    layout['bar_width'] - fill_inset * 2,
+                    layout['bar_y'] + layout['bar_height'] - METER_HEIGHT - fill_inset, 
+                    METER_HEIGHT, inner_radius
                 )
             
             self._composite_icon(image, layout['icon_left_x'], layout['icon_bottom_y'], layout['icon_max_size'])
             return image
         except Exception as img_e:
-            log.error(f"Error creating target device image: {img_e}")
+            log.error(f"Error creating device image: {img_e}")
             return None
+    
+    def _render_source_device(self, is_muted: bool = False) -> Optional[Image.Image]:
+        return self._render_device(is_muted)
+    
+    def _render_target_device(self, muted: bool = False) -> Optional[Image.Image]:
+        return self._render_device(muted)
     
     def _draw_rounded_rect(
         self,
@@ -254,75 +253,7 @@ class ImageRenderer:
         draw.pieslice([x1, y2 - 2*radius, x1 + 2*radius, y2], 90, 180, fill=fill)
         draw.pieslice([x2 - 2*radius, y2 - 2*radius, x2, y2], 0, 90, fill=fill)
     
-    def _draw_rounded_rect_outline(
-        self,
-        draw: ImageDraw.ImageDraw,
-        bbox: tuple[int, int, int, int],
-        radius: int,
-        outline: tuple[int, int, int, int],
-        width: int = 1
-    ) -> None:
-        x1, y1, x2, y2 = bbox
-        if radius <= 0:
-            draw.rectangle(bbox, outline=outline, width=width)
-            return
-        
-        draw.rectangle([x1 + radius, y1, x2 - radius, y1 + width], fill=outline)
-        draw.rectangle([x1 + radius, y2 - width, x2 - radius, y2], fill=outline)
-        draw.rectangle([x1, y1 + radius, x1 + width, y2 - radius], fill=outline)
-        draw.rectangle([x2 - width, y1 + radius, x2, y2 - radius], fill=outline)
-        
-        if width == 1:
-            draw.arc([x1, y1, x1 + 2*radius, y1 + 2*radius], 180, 270, fill=outline)
-            draw.arc([x2 - 2*radius, y1, x2, y1 + 2*radius], 270, 360, fill=outline)
-            draw.arc([x1, y2 - 2*radius, x1 + 2*radius, y2], 90, 180, fill=outline)
-            draw.arc([x2 - 2*radius, y2 - 2*radius, x2, y2], 0, 90, fill=outline)
-        else:
-            for i in range(width):
-                offset = i
-                draw.arc([x1 - offset, y1 - offset, x1 + 2*radius + offset, y1 + 2*radius + offset], 180, 270, fill=outline)
-                draw.arc([x2 - 2*radius - offset, y1 - offset, x2 + offset, y1 + 2*radius + offset], 270, 360, fill=outline)
-                draw.arc([x1 - offset, y2 - 2*radius - offset, x1 + 2*radius + offset, y2 + offset], 90, 180, fill=outline)
-                draw.arc([x2 - 2*radius - offset, y2 - 2*radius - offset, x2 + offset, y2 + offset], 0, 90, fill=outline)
     
-    def _draw_volume_bar(
-        self,
-        draw: ImageDraw.ImageDraw,
-        x: int,
-        y: int,
-        width: int,
-        height: int,
-        volume: int,
-        is_muted: bool,
-        device_color: Optional[dict[str, int]] = None,
-        fallback_color: tuple[int, int, int, int] = COLOR_SOURCE_FILL
-    ) -> None:
-        draw.rectangle([x, y, x + width, y + height], fill=COLOR_BACKGROUND_DARK)
-        draw.rectangle([x, y, x + width, y + height], outline=COLOR_OUTLINE_GRAY, width=4)
-        
-        if volume <= 0:
-            return
-            
-        fill_width = int((volume / 100.0) * width)
-        fill_x = x + 4
-        fill_x2 = x + min(fill_width, width - 4)
-        fill_y = y + 4
-        fill_y2 = y + height - 4
-        
-        if fill_x2 <= fill_x:
-            return
-        
-        if is_muted:
-            draw.rectangle([fill_x, fill_y, fill_x2, fill_y2], fill=COLOR_MUTED_FILL)
-        else:
-            volume_bar_color = self.action._volume_bar_color
-            if volume_bar_color:
-                color = volume_bar_color
-            elif device_color:
-                color = (device_color['red'], device_color['green'], device_color['blue'], 255)
-            else:
-                color = fallback_color
-            draw.rectangle([fill_x, fill_y, fill_x2, fill_y2], fill=color)
     
     def _draw_animated_meter(
         self,
@@ -381,10 +312,14 @@ class ImageRenderer:
     
     def _set_image_on_action(self, image: Image.Image) -> None:
         try:
-            image.load()
-            self.action.set_media(image=image, update=True)
+            if image.mode != 'RGBA':
+                image = image.convert('RGBA')
             
-            # Workaround: call update again to force hardware sync
+            materialized_image = image.copy()
+            materialized_image.load()
+            
+            self.action.set_media(image=materialized_image, update=True)
+            
             dial = self.action.get_input()
             if dial:
                 dial.update()
