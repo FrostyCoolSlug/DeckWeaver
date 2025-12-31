@@ -34,10 +34,11 @@ VOLUME_RAW_MAX: Final[int] = 255
 # Image rendering constants
 IMAGE_WIDTH: Final[int] = 480
 IMAGE_HEIGHT: Final[int] = 240
-EDGE_PADDING: Final[int] = 10
-ICON_MAX_SIZE: Final[int] = 150
+EDGE_PADDING: Final[int] = 20  # General edge padding
+CORNER_INSET: Final[int] = 28  # Extra inset for rounded corners
+ICON_MAX_SIZE: Final[int] = 105  # Smaller icon to fit within bounds
 BAR_HEIGHT: Final[int] = 32
-BAR_RADIUS: Final[int] = 4
+BAR_RADIUS: Final[int] = 6
 METER_HEIGHT: Final[int] = 10
 METER_EDGE_INSET: Final[int] = 6
 
@@ -62,7 +63,7 @@ MONOSPACE_FONT_PATHS: Final[tuple[tuple[str, bool], ...]] = (
 COLOR_BACKGROUND_DARK: Final[tuple[int, int, int, int]] = (30, 30, 30, 255)
 COLOR_OUTLINE_GRAY: Final[tuple[int, int, int, int]] = (60, 60, 60, 255)
 COLOR_MUTED_BG: Final[tuple[int, int, int, int]] = (38, 38, 38, 255)
-COLOR_MUTED_FILL: Final[tuple[int, int, int, int]] = (77, 77, 77, 255)
+COLOR_MUTED_FILL: Final[tuple[int, int, int, int]] = (110, 110, 110, 255)
 COLOR_MUTED_OUTLINE: Final[tuple[int, int, int, int]] = (77, 77, 77, 255)
 COLOR_TARGET_BG: Final[tuple[int, int, int, int]] = (20, 38, 20, 255)
 COLOR_TARGET_OUTLINE: Final[tuple[int, int, int, int]] = (102, 204, 102, 255)

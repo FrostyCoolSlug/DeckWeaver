@@ -1,6 +1,5 @@
 """PipeWeaver action for StreamController"""
 import os
-import time
 from typing import Any, Optional
 
 from PIL import Image  # type: ignore
@@ -66,12 +65,14 @@ class PipeWeaverAction(ActionBase):
         self._meter_color: Optional[tuple[int, int, int, int]] = None
         self._volume_bar_color: Optional[tuple[int, int, int, int]] = None
         self._meters_enabled: bool = True
+        self._is_loading_devices: bool = False
         self.client: PipeWeaverWebSocketClient
         
         self._load_settings()
         self._is_initializing = False
         self._start_meter_client()
         add_state_change_callback(self._on_service_state_change)
+        self._load_devices_async()
     
     def _get_device_by_id(
         self, device_id: str, device_type: Optional[str] = None
@@ -93,8 +94,8 @@ class PipeWeaverAction(ActionBase):
     
     def _load_settings(self) -> None:
         settings = self.get_settings()
-        self._ensure_connection_and_load_devices()
-        self._load_device_settings(settings)
+        if self.devices:
+            self._load_device_settings(settings)
         self.volume_step = settings.get('volume_step', DEFAULT_VOLUME_STEP)
         self.icon_path_from_picker = settings.get("icon_path_from_picker")
         
@@ -110,7 +111,6 @@ class PipeWeaverAction(ActionBase):
         else:
             self._volume_bar_color = None
         
-        # Load meters enabled setting (default to True for backward compatibility)
         self._meters_enabled = settings.get("meters_enabled", True)
     
     def _load_devices(self) -> list[DeviceInfo]:
@@ -128,6 +128,44 @@ class PipeWeaverAction(ActionBase):
     def _ensure_connection_and_load_devices(self):
         if not self.devices and self.client.connected:
             self.devices = self._load_devices()
+    
+    def _load_devices_async(self) -> None:
+        """Load devices asynchronously without blocking"""
+        if self._is_loading_devices:
+            return
+        
+        def do_load() -> bool:
+            try:
+                if not is_service_available():
+                    return False
+                
+                if not self.client.connected:
+                    GLib.timeout_add(200, do_load)
+                    return False
+                
+                self._is_loading_devices = True
+                self._last_draw_state = None
+                self.update_image()
+                
+                self.devices = self._load_devices()
+                
+                if self.devices:
+                    settings = self.get_settings()
+                    self._load_device_settings(settings)
+                
+                self._is_loading_devices = False
+                self._last_draw_state = None
+                self.update_image()
+                
+            except Exception as e:
+                log.error(f"Error loading devices asynchronously: {e}")
+                self._is_loading_devices = False
+                self._last_draw_state = None
+                self.update_image()
+            
+            return False
+        
+        GLib.timeout_add(100, do_load)
     
     def _load_device_settings(self, settings: dict) -> None:
         saved_device_id = settings.get('device_id')
@@ -157,8 +195,18 @@ class PipeWeaverAction(ActionBase):
             device_data = get_device_by_id(devices_tree, self.selected_device_id, self.selected_device_type)
             if device_data:
                 desc = device_data.get("description", {})
+                
+                new_name = desc.get("name")
+                if new_name and new_name != self.selected_device_name:
+                    self.selected_device_name = new_name
+                    self._last_draw_state = None
+                
                 color = desc.get("colour", {})
+                old_color = self._device_color
                 self._device_color = color if isinstance(color, dict) else {}
+                
+                if old_color != self._device_color:
+                    self._last_draw_state = None
                 
                 old_muted = self._is_muted
                 if self.selected_device_type == DEVICE_TYPE_SOURCE:
@@ -168,6 +216,11 @@ class PipeWeaverAction(ActionBase):
                     self._is_muted = device_data.get("mute_state") == "Muted"
                 
                 if old_muted != self._is_muted:
+                    self._last_draw_state = None
+                
+                old_volume = self.volume
+                self.volume = self._extract_volume_from_device_data(device_data)
+                if old_volume != self.volume:
                     self._last_draw_state = None
             else:
                 self._device_color = {}
@@ -235,7 +288,6 @@ class PipeWeaverAction(ActionBase):
         return volume
     
     def get_config_rows(self):
-        # Use the centralized service monitor for detection
         if not is_service_available():
             error_row = Adw.ActionRow()
             error_row.set_title(self.plugin_base.lm.get("ui.error.not_running.title"))
@@ -256,7 +308,6 @@ class PipeWeaverAction(ActionBase):
         self.device_selector.connect("notify::selected-item", self.on_device_changed)
         self._populate_device_list()
         
-        # Add refresh button to the right of the dropdown
         refresh_button = Gtk.Button(
             icon_name="view-refresh-symbolic",
             valign=Gtk.Align.CENTER,
@@ -312,7 +363,7 @@ class PipeWeaverAction(ActionBase):
         
         icon_content_box.append(icon_button_box)
         icon_row.add_suffix(icon_content_box)
-        self.icon_row = icon_row  # Store reference for updates
+        self.icon_row = icon_row
         
         self.volume_step_row = Adw.SpinRow.new_with_range(MIN_VOLUME_STEP, MAX_VOLUME_STEP, 1)
         self.volume_step_row.set_title(self.plugin_base.lm.get("ui.volume_step.title"))
@@ -416,7 +467,7 @@ class PipeWeaverAction(ActionBase):
         
         if hasattr(self, 'set_top_label'):
             device_name = (self.selected_device_name[:25] 
-                          if self.selected_device_name else "Unknown")
+                          if self.selected_device_name else "Loading...")
             self.set_top_label(device_name, font_size=14)
     
     def _populate_device_list(self) -> None:
@@ -576,7 +627,6 @@ class PipeWeaverAction(ActionBase):
             if hasattr(self, 'icon_row'):
                 self.icon_row.set_subtitle("Select an icon from StreamController's icon packs")
         
-        # Clear last draw state to force redraw without icon
         self._last_draw_state = None
         self.update_image()
         
@@ -750,24 +800,25 @@ class PipeWeaverAction(ActionBase):
         return None
     
     def on_enable(self):
-        if self.client.connected:
-            self.devices = self._load_devices()
-        else:
-            self.devices = []
-
+        self.devices = []
         self._load_settings()
         self._last_draw_state = None
+        self._load_devices_async()
         self.update_image()
     
     def on_ready(self):
         self.on_enable()
         
         if hasattr(self, 'set_top_label'):
-            device_name = self.selected_device_name[:25] if self.selected_device_name else "Unknown"
+            device_name = self.selected_device_name[:25] if self.selected_device_name else "Loading..."
             self.set_top_label(device_name, font_size=14)
         
         self._start_meter_client()
         self._last_draw_state = None
+        
+        if not self.devices and not self._is_loading_devices:
+            self._load_devices_async()
+        
         self.update_image()
     
     def on_disable(self):
@@ -777,23 +828,7 @@ class PipeWeaverAction(ActionBase):
     
     def _on_service_state_change(self, available: bool) -> None:
         if available:
-            def refresh_after_service_available() -> bool:
-                try:
-                    self.devices = self._load_devices()
-                    
-                    if self.selected_device_id:
-                        self._update_device_from_api()
-                        current_volume = self._get_current_volume()
-                        if current_volume is not None:
-                            self.volume = current_volume
-                    
-                    self._last_draw_state = None
-                    self.update_image()
-                except Exception as e:
-                    log.warning(f"Error refreshing after service became available: {e}")
-                return False
-            
-            GLib.timeout_add(500, refresh_after_service_available)
+            self._load_devices_async()
         else:
             self._last_draw_state = None
             self.update_image()
@@ -837,17 +872,16 @@ class PipeWeaverAction(ActionBase):
             device_data = get_device_by_id(devices_tree, self.selected_device_id, self.selected_device_type)
             if device_data:
                 self.volume = self._extract_volume_from_device_data(device_data)
+                old_name = self.selected_device_name
                 self._update_device_from_api(status)
+                if old_name != self.selected_device_name and hasattr(self, 'set_top_label'):
+                    device_name = self.selected_device_name[:25] if self.selected_device_name else "Loading..."
+                    self.set_top_label(device_name, font_size=14)
                 self.update_image()
         except Exception as e:
             log.error(f"Error handling patch update: {e}")
     
     def update_image(self):
-        try:
-            selected_mixes_tuple = tuple(sorted(self.selected_mixes)) if hasattr(self, "selected_mixes") else tuple()
-        except Exception:
-            selected_mixes_tuple = tuple()
-
         icon_path = self.icon_path_from_picker
         if icon_path:
             try:
@@ -855,9 +889,12 @@ class PipeWeaverAction(ActionBase):
             except Exception:
                 pass
 
+        device_color_tuple = tuple(sorted(self._device_color.items())) if self._device_color else tuple()
+        
         current_state = (
             self.selected_device_id,
             self.selected_device_type,
+            self.selected_device_name,
             self.volume,
             self._current_meter_a,
             self._current_meter_target,
@@ -865,7 +902,7 @@ class PipeWeaverAction(ActionBase):
             icon_path,
             self._meter_color,
             self._volume_bar_color,
-            selected_mixes_tuple,
+            device_color_tuple,
             is_service_available(),
         )
 
@@ -877,7 +914,7 @@ class PipeWeaverAction(ActionBase):
         def _do_render():
             try:
                 if hasattr(self, 'set_top_label'):
-                    device_name = self.selected_device_name[:25] if self.selected_device_name else "Unknown"
+                    device_name = self.selected_device_name[:25] if self.selected_device_name else "Loading..."
                     self.set_top_label(device_name, font_size=14)
 
                 image_renderer = ImageRenderer(self)

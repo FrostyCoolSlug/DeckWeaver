@@ -90,20 +90,6 @@ def is_service_available() -> bool:
         return _service_available
 
 
-def force_check() -> bool:
-    global _service_available
-    
-    available = _check_service()
-    with _monitor_lock:
-        old_state = _service_available
-        _service_available = available
-    
-    if old_state != available:
-        _notify_callbacks(available)
-    
-    return available
-
-
 def add_state_change_callback(callback: Callable[[bool], None]) -> None:
     if callback:
         with _callbacks_lock:

@@ -483,19 +483,6 @@ class PipeWeaverWebSocketClient:
             return False
         new_volume = max(0, min(100, current_volume + delta))
         return self.set_volume(device_id, new_volume)
-    
-    def set_volume_linked(self, device_id: str, linked: bool) -> bool:
-        return self._send_pipewire_command({"SetSourceVolumeLinked": [device_id, linked]})
-    
-    def is_volume_linked(self, device_id: str) -> bool:
-        try:
-            devices_tree = self._get_devices_tree()
-            for device in devices_tree.get("sources", {}).get("virtual_devices", []):
-                if device["description"]["id"] == device_id:
-                    return device.get("volumes", {}).get("volumes_linked") is not None
-        except Exception:
-            pass
-        return False
 
 
 def acquire_shared_pipeweaver_client(
