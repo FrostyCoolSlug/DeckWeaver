@@ -29,7 +29,7 @@
     "ui.custom_icon_file.selected": "已选择：{filename}",
     
     "ui.volume_step.title": "音量步长",
-    "ui.volume_step.subtitle": "每次拨盘步长的音量变化（1-20%）",
+    "ui.volume_step.subtitle": "每次拨盘步长的音量变化（5-20%）",
     
     "ui.refresh_devices.button": "刷新设备",
     

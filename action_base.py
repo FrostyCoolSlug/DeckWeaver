@@ -65,6 +65,7 @@ class PipeWeaverAction(ActionBase):
         self._meter_color: Optional[tuple[int, int, int, int]] = None
         self._volume_bar_color: Optional[tuple[int, int, int, int]] = None
         self._meters_enabled: bool = True
+        self._meter_invert_color: bool = True
         self._is_loading_devices: bool = False
         self.client: PipeWeaverWebSocketClient
         
@@ -112,6 +113,7 @@ class PipeWeaverAction(ActionBase):
             self._volume_bar_color = None
         
         self._meters_enabled = settings.get("meters_enabled", True)
+        self._meter_invert_color = settings.get("meter_invert_color", True)
     
     def _load_devices(self) -> list[DeviceInfo]:
         if not self.client.connected:
@@ -374,16 +376,26 @@ class PipeWeaverAction(ActionBase):
         self.volume_step_row.set_value(volume_step)
         self.volume_step_row.connect("notify::value", self.on_volume_step_changed)
 
-        meter_color_row = Adw.ActionRow()
-        meter_color_row.set_title("Meter Color")
-        meter_color_row.set_subtitle("Color for the audio level meter")
-        
-        meter_color_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        meters_enabled_row = Adw.ActionRow()
+        meters_enabled_row.set_title("Meters Enabled")
+        meters_enabled_row.set_subtitle("Show audio level meters")
         
         self.meters_enabled_switch = Gtk.Switch(valign=Gtk.Align.CENTER)
         self.meters_enabled_switch.set_active(getattr(self, "_meters_enabled", True))
         self.meters_enabled_switch.connect("notify::active", self.on_meters_enabled_changed)
-        meter_color_box.append(self.meters_enabled_switch)
+        meters_enabled_row.add_suffix(self.meters_enabled_switch)
+
+        meter_color_row = Adw.ActionRow()
+        meter_color_row.set_title("Meter Color")
+        meter_color_row.set_subtitle("Invert volume color or use custom color")
+        
+        meter_color_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        
+        self.meter_invert_switch = Gtk.Switch(valign=Gtk.Align.CENTER)
+        self.meter_invert_switch.set_active(getattr(self, "_meter_invert_color", True))
+        self.meter_invert_switch.connect("notify::active", self.on_meter_invert_changed)
+        self.meter_invert_switch.set_sensitive(self._meters_enabled)
+        meter_color_box.append(self.meter_invert_switch)
         
         self.meter_color_button = Gtk.ColorButton(valign=Gtk.Align.CENTER)
         meter_color = getattr(self, "_meter_color", None) or COLOR_METER
@@ -394,13 +406,13 @@ class PipeWeaverAction(ActionBase):
         rgba.alpha = meter_color[3] / 255.0
         self.meter_color_button.set_rgba(rgba)
         self.meter_color_button.connect("color-set", self.on_meter_color_changed)
-        self.meter_color_button.set_sensitive(self._meters_enabled)
+        self.meter_color_button.set_sensitive(self._meters_enabled and not self._meter_invert_color)
         meter_color_box.append(self.meter_color_button)
         
         self.clear_meter_color_button = Gtk.Button(icon_name="edit-clear-symbolic", valign=Gtk.Align.CENTER)
         self.clear_meter_color_button.set_tooltip_text("Reset to default")
         self.clear_meter_color_button.connect("clicked", self.on_clear_meter_color_clicked)
-        self.clear_meter_color_button.set_sensitive(self._meters_enabled)
+        self.clear_meter_color_button.set_sensitive(self._meters_enabled and not self._meter_invert_color)
         meter_color_box.append(self.clear_meter_color_button)
         
         meter_color_row.add_suffix(meter_color_box)
@@ -451,6 +463,7 @@ class PipeWeaverAction(ActionBase):
             self.device_selector,
             icon_row,
             self.volume_step_row,
+            meters_enabled_row,
             meter_color_row,
             volume_bar_color_row
         ]
@@ -534,9 +547,11 @@ class PipeWeaverAction(ActionBase):
         self.set_settings(settings)
         
         if hasattr(self, 'meter_color_button'):
-            self.meter_color_button.set_sensitive(self._meters_enabled)
+            self.meter_color_button.set_sensitive(self._meters_enabled and not self._meter_invert_color)
         if hasattr(self, 'clear_meter_color_button'):
-            self.clear_meter_color_button.set_sensitive(self._meters_enabled)
+            self.clear_meter_color_button.set_sensitive(self._meters_enabled and not self._meter_invert_color)
+        if hasattr(self, 'meter_invert_switch'):
+            self.meter_invert_switch.set_sensitive(self._meters_enabled)
         
         if self._meters_enabled:
             self._start_meter_client()
@@ -544,6 +559,20 @@ class PipeWeaverAction(ActionBase):
             self._current_meter_a = 0
             self._current_meter_target = 0
             self._stop_meter_client()
+        
+        self._last_draw_state = None
+        self.update_image()
+    
+    def on_meter_invert_changed(self, switch: Gtk.Switch, *args: Any) -> None:
+        self._meter_invert_color = switch.get_active()
+        settings = self.get_settings()
+        settings["meter_invert_color"] = self._meter_invert_color
+        self.set_settings(settings)
+        
+        if hasattr(self, 'meter_color_button'):
+            self.meter_color_button.set_sensitive(self._meters_enabled and not self._meter_invert_color)
+        if hasattr(self, 'clear_meter_color_button'):
+            self.clear_meter_color_button.set_sensitive(self._meters_enabled and not self._meter_invert_color)
         
         self._last_draw_state = None
         self.update_image()
@@ -914,8 +943,12 @@ class PipeWeaverAction(ActionBase):
         def _do_render():
             try:
                 if hasattr(self, 'set_top_label'):
-                    device_name = self.selected_device_name[:25] if self.selected_device_name else "Loading..."
-                    self.set_top_label(device_name, font_size=14)
+                    # Hide label when service is unavailable
+                    if is_service_available():
+                        device_name = self.selected_device_name[:25] if self.selected_device_name else "Loading..."
+                        self.set_top_label(device_name, font_size=14)
+                    else:
+                        self.set_top_label("", font_size=14)
 
                 image_renderer = ImageRenderer(self)
                 image_renderer.render_image()

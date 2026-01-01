@@ -31,7 +31,7 @@
     "ui.custom_icon_file.selected": "Selected: {filename}",
     
     "ui.volume_step.title": "Volume Step",
-    "ui.volume_step.subtitle": "Volume change per dial step (1-20%)",
+    "ui.volume_step.subtitle": "Volume change per dial step (5-20%)",
     
     "ui.refresh_devices.button": "Refresh Devices",
     

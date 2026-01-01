@@ -7,8 +7,11 @@ from PIL import Image  # type: ignore
 from loguru import logger as log  # type: ignore
 
 from .constants import (
+    BAR_GUTTER_SIZE,
     BAR_HEIGHT,
+    BAR_HORIZONTAL_OFFSET,
     BAR_RADIUS,
+    BAR_VERTICAL_OFFSET,
     COLOR_METER,
     COLOR_MUTED_FILL,
     COLOR_SERVICE_UNAVAILABLE_BG,
@@ -17,13 +20,40 @@ from .constants import (
     COLOR_SOURCE_FILL,
     COLOR_TARGET_FILL,
     CORNER_INSET,
+    DEFAULT_FONT_SIZE,
     DEVICE_TYPE_SOURCE,
     EDGE_PADDING,
+    GUTTER_COLOR_DARK,
+    GUTTER_COLOR_LIGHT,
+    GUTTER_LUMINANCE_THRESHOLD,
     ICON_MAX_SIZE,
     IMAGE_HEIGHT,
     IMAGE_WIDTH,
-    METER_EDGE_INSET,
+    LOADING_ANIMATION_FRAMES,
+    LOADING_SPINNER_ALPHA_MAX,
+    LOADING_SPINNER_ALPHA_MIN,
+    LOADING_SPINNER_ANGLE_STEP,
+    LOADING_SPINNER_DOT_COUNT,
+    LOADING_SPINNER_DOT_RADIUS,
+    LOADING_SPINNER_RADIUS,
+    LOADING_SPINNER_VERTICAL_OFFSET,
+    LOADING_TEXT_COLOR,
+    LOADING_TEXT_FONT_SIZE,
+    LOADING_TEXT_VERTICAL_OFFSET,
     METER_HEIGHT,
+    METER_HORIZONTAL_MARGIN,
+    RADIUS_DIVISOR,
+    RGB_MAX,
+    ALPHA_FULL_OPACITY,
+    GUTTER_MULTIPLIER,
+    SERVICE_UNAVAILABLE_HINT_FONT_SIZE,
+    SERVICE_UNAVAILABLE_HINT_Y,
+    SERVICE_UNAVAILABLE_SUBTITLE_FONT_SIZE,
+    SERVICE_UNAVAILABLE_SUBTITLE_Y,
+    SERVICE_UNAVAILABLE_TITLE_FONT_SIZE,
+    SERVICE_UNAVAILABLE_TITLE_Y,
+    VOLUME_FULL_TOLERANCE,
+    VOLUME_PERCENTAGE_MAX,
 )
 from .service_monitor import is_service_available
 
@@ -48,7 +78,6 @@ class ImageRenderer:
                 image = self._render_loading()
                 if image:
                     self._set_image_on_action(image)
-                    self._loading_frame = (self._loading_frame + 1) % 60
             except Exception as e:
                 log.error(f"Error rendering loading state: {e}")
             return
@@ -103,9 +132,57 @@ class ImageRenderer:
     def _set_color(self, ctx: cairo.Context, color: tuple[int, int, int, int]):
         """Set Cairo color from RGBA tuple (0-255)"""
         r, g, b, a = color
-        ctx.set_source_rgba(r / 255.0, g / 255.0, b / 255.0, a / 255.0)
+        ctx.set_source_rgba(r / float(RGB_MAX), g / float(RGB_MAX), b / float(RGB_MAX), a / float(RGB_MAX))
     
-    def _draw_text_centered(self, ctx: cairo.Context, text: str, x: float, y: float, font_size: float = 24):
+    def _relative_luminance(self, color: tuple[int, int, int, int]) -> float:
+        """Calculate relative luminance according to WCAG 2.1"""
+        r, g, b, _ = color
+        
+        # Normalize RGB values to 0-1 range
+        def normalize(val):
+            val = val / float(RGB_MAX)
+            if val <= 0.03928:
+                return val / 12.92
+            else:
+                return ((val + 0.055) / 1.055) ** 2.4
+        
+        r_norm = normalize(r)
+        g_norm = normalize(g)
+        b_norm = normalize(b)
+        
+        return 0.2126 * r_norm + 0.7152 * g_norm + 0.0722 * b_norm
+    
+    def _contrast_ratio(self, color1: tuple[int, int, int, int], color2: tuple[int, int, int, int]) -> float:
+        """Calculate contrast ratio between two colors according to WCAG 2.1"""
+        lum1 = self._relative_luminance(color1)
+        lum2 = self._relative_luminance(color2)
+        
+        # Ensure lighter color is in numerator
+        lighter = max(lum1, lum2)
+        darker = min(lum1, lum2)
+        
+        if darker == 0:
+            return float('inf')
+        
+        return (lighter + 0.05) / (darker + 0.05)
+    
+    def _get_gutter_color(self, fill_color: Optional[tuple[int, int, int, int]]) -> tuple[int, int, int, int]:
+        """Get appropriate gutter color based on fill color brightness (WCAG AA compliant)"""
+        # If no fill color or volume is 0, use default dark gutter
+        if not fill_color:
+            return GUTTER_COLOR_DARK
+        
+        # Check if fill color is dark (low luminance)
+        # If fill color is dark, use light gutter for visibility
+        fill_luminance = self._relative_luminance(fill_color)
+        
+        # Use light gutter for dark fill colors
+        if fill_luminance < GUTTER_LUMINANCE_THRESHOLD:
+            return GUTTER_COLOR_LIGHT
+        
+        return GUTTER_COLOR_DARK
+    
+    def _draw_text_centered(self, ctx: cairo.Context, text: str, x: float, y: float, font_size: float = DEFAULT_FONT_SIZE):
         """Draw centered text at position"""
         ctx.select_font_face("monospace", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
         ctx.set_font_size(font_size)
@@ -122,12 +199,12 @@ class ImageRenderer:
             ctx.fill()
             
             self._set_color(ctx, COLOR_SERVICE_UNAVAILABLE_TEXT)
-            self._draw_text_centered(ctx, "PipeWeaver", IMAGE_WIDTH / 2, 60, 28)
+            self._draw_text_centered(ctx, "PipeWeaver", IMAGE_WIDTH / 2, SERVICE_UNAVAILABLE_TITLE_Y, SERVICE_UNAVAILABLE_TITLE_FONT_SIZE)
             
-            self._draw_text_centered(ctx, "Service Unavailable", IMAGE_WIDTH / 2, 100, 18)
+            self._draw_text_centered(ctx, "Service Unavailable", IMAGE_WIDTH / 2, SERVICE_UNAVAILABLE_SUBTITLE_Y, SERVICE_UNAVAILABLE_SUBTITLE_FONT_SIZE)
             
             self._set_color(ctx, COLOR_SERVICE_UNAVAILABLE_HINT)
-            self._draw_text_centered(ctx, "Start PipeWeaver to continue", IMAGE_WIDTH / 2, 160, 18)
+            self._draw_text_centered(ctx, "Start PipeWeaver to continue", IMAGE_WIDTH / 2, SERVICE_UNAVAILABLE_HINT_Y, SERVICE_UNAVAILABLE_HINT_FONT_SIZE)
             
             return self._cairo_to_pil(surface)
         except Exception as e:
@@ -139,22 +216,9 @@ class ImageRenderer:
             surface, ctx = self._create_cairo_surface(IMAGE_WIDTH, IMAGE_HEIGHT)
             
             center_x, center_y = IMAGE_WIDTH / 2, IMAGE_HEIGHT / 2
-            spinner_radius = 20
-            dot_count = 8
-            angle_step = 2 * math.pi / dot_count
             
-            for i in range(dot_count):
-                angle = (self._loading_frame * 0.1) + (i * angle_step)
-                dot_x = center_x + math.cos(angle) * spinner_radius
-                dot_y = center_y - 30 + math.sin(angle) * spinner_radius
-                
-                alpha = 0.3 + 0.7 * (1.0 - abs(i - (self._loading_frame % dot_count)) / dot_count)
-                ctx.set_source_rgba(1.0, 1.0, 1.0, alpha)
-                ctx.arc(dot_x, dot_y, 3, 0, 2 * math.pi)
-                ctx.fill()
-            
-            self._set_color(ctx, (255, 255, 255, 255))
-            self._draw_text_centered(ctx, "Loading...", center_x, center_y + 20, 24)
+            self._set_color(ctx, LOADING_TEXT_COLOR)
+            self._draw_text_centered(ctx, "Loading...", center_x, center_y, LOADING_TEXT_FONT_SIZE)
             
             return self._cairo_to_pil(surface)
         except Exception as e:
@@ -168,7 +232,17 @@ class ImageRenderer:
         left_margin = icon_left_x + ICON_MAX_SIZE + EDGE_PADDING
         right_margin = CORNER_INSET
         bar_width = IMAGE_WIDTH - left_margin - right_margin
-        bar_y = IMAGE_HEIGHT - BAR_HEIGHT - CORNER_INSET - 8
+        bar_y = IMAGE_HEIGHT - BAR_HEIGHT - CORNER_INSET - BAR_VERTICAL_OFFSET
+        
+        # Bar position (volume bar inside gutter)
+        bar_x = left_margin + BAR_HORIZONTAL_OFFSET
+        
+        # Gutter dimensions (larger than bar to create border effect)
+        gutter_x = bar_x - BAR_GUTTER_SIZE
+        gutter_y = bar_y - BAR_GUTTER_SIZE
+        gutter_width = bar_width + (BAR_GUTTER_SIZE * GUTTER_MULTIPLIER)
+        gutter_height = BAR_HEIGHT + (BAR_GUTTER_SIZE * GUTTER_MULTIPLIER)
+        gutter_radius = (BAR_HEIGHT / RADIUS_DIVISOR) + BAR_GUTTER_SIZE
         
         return {
             'image_width': IMAGE_WIDTH,
@@ -181,8 +255,14 @@ class ImageRenderer:
             'left_margin': left_margin,
             'bar_width': bar_width,
             'bar_height': BAR_HEIGHT,
+            'bar_x': bar_x,
             'bar_y': bar_y,
-            'radius': BAR_RADIUS
+            'bar_radius': BAR_HEIGHT / RADIUS_DIVISOR,
+            'gutter_x': gutter_x,
+            'gutter_y': gutter_y,
+            'gutter_width': gutter_width,
+            'gutter_height': gutter_height,
+            'gutter_radius': gutter_radius,
         }
     
     def _render_device(self, is_muted: bool = False) -> Optional[Image.Image]:
@@ -191,24 +271,27 @@ class ImageRenderer:
         device_color = self.action._device_color or {}
         is_source = self.action.selected_device_type == DEVICE_TYPE_SOURCE
         
-        GUTTER_BG = (70, 70, 70, 255)
-        
         try:
             layout = self._get_layout_constants()
             surface, ctx = self._create_cairo_surface(layout['image_width'], layout['image_height'])
             
-            bar_x = layout['left_margin'] - 2
+            # All dimensions come from layout constants (fully parametric)
+            bar_x = layout['bar_x']
+            bar_y = layout['bar_y']
             bar_width = layout['bar_width']
             bar_height = layout['bar_height']
-            bar_y = layout['bar_y']
-            radius = layout['bar_height'] / 2
-
-            self._set_color(ctx, GUTTER_BG)
-            self._draw_rounded_rect(ctx, bar_x, bar_y, bar_width, bar_height, radius)
-            ctx.fill()
-
-            effective_fill_width = (volume / 100.0) * bar_width
+            bar_radius = layout['bar_radius']
             
+            gutter_x = layout['gutter_x']
+            gutter_y = layout['gutter_y']
+            gutter_width = layout['gutter_width']
+            gutter_height = layout['gutter_height']
+            gutter_radius = layout['gutter_radius']
+
+            effective_fill_width = (volume / VOLUME_PERCENTAGE_MAX) * bar_width
+            
+            # Determine fill color first (needed for WCAG contrast check)
+            fill_color = None
             if effective_fill_width > 0:
                 if is_muted:
                     fill_color = COLOR_MUTED_FILL
@@ -218,20 +301,32 @@ class ImageRenderer:
                         fill_color = volume_bar_color
                     elif device_color:
                         fill_color = (device_color.get('red', 0), device_color.get('green', 0), 
-                                      device_color.get('blue', 0), 255)
+                                      device_color.get('blue', 0), ALPHA_FULL_OPACITY)
                     else:
                         fill_color = COLOR_SOURCE_FILL if is_source else COLOR_TARGET_FILL
-                
+            
+            # Get appropriate gutter color based on fill color contrast (WCAG compliant)
+            gutter_bg = self._get_gutter_color(fill_color)
+            
+            # Draw gutter (larger, creating border effect)
+            self._set_color(ctx, gutter_bg)
+            self._draw_rounded_rect(ctx, gutter_x, gutter_y, gutter_width, gutter_height, gutter_radius)
+            ctx.fill()
+
+            # Draw fill if there's volume
+            if effective_fill_width > 0 and fill_color:
                 self._set_color(ctx, fill_color)
-                self._draw_rounded_rect(ctx, bar_x, bar_y, effective_fill_width, bar_height, radius)
+                # Draw volume bar: both ends always semi-circles
+                self._draw_rounded_rect(ctx, bar_x, bar_y, effective_fill_width, bar_height, bar_radius, right_end_flat=False)
                 ctx.fill()
             
             meter_value = self.action._current_meter_a if is_source else self.action._current_meter_target
-            if self.action._meters_enabled and meter_value > 0 and effective_fill_width > 0:
-                meter_y = bar_y + bar_height - METER_HEIGHT - 2
+            if self.action._meters_enabled and meter_value > 0 and effective_fill_width > 0 and fill_color:
+                meter_y = bar_y + (bar_height - METER_HEIGHT) / RADIUS_DIVISOR
+                volume_color_for_invert = fill_color
                 self._draw_animated_meter(
                     ctx, meter_value, int(effective_fill_width), int(bar_x), 
-                    int(bar_width), int(meter_y), METER_HEIGHT, int(radius)
+                    int(effective_fill_width), int(meter_y), METER_HEIGHT, int(bar_radius), volume_color_for_invert
                 )
             
             image = self._cairo_to_pil(surface)
@@ -254,24 +349,57 @@ class ImageRenderer:
         y: float,
         width: float,
         height: float,
-        radius: float
+        radius: float,
+        right_end_flat: bool = False
     ) -> None:
-        """Draw rounded rectangle"""
+        """Draw rounded rectangle with optional flat right end"""
         if width <= 0 or height <= 0:
             return
         
-        max_radius = min(width, height) / 2
-        radius = min(radius, max_radius)
+        # Left end should ALWAYS be a semi-circle with full radius (or height/RADIUS_DIVISOR if smaller)
+        left_radius = min(radius, height / RADIUS_DIVISOR)
         
-        if radius <= 0:
+        # Right end radius depends on width
+        max_radius = min(width, height) / RADIUS_DIVISOR
+        right_radius = min(radius, max_radius) if not right_end_flat else 0
+        
+        if left_radius <= 0:
             ctx.rectangle(x, y, width, height)
             return
         
         ctx.new_sub_path()
-        ctx.arc(x + width - radius, y + radius, radius, -math.pi / 2, 0)
-        ctx.arc(x + width - radius, y + height - radius, radius, 0, math.pi / 2)
-        ctx.arc(x + radius, y + height - radius, radius, math.pi / 2, math.pi)
-        ctx.arc(x + radius, y + radius, radius, math.pi, 3 * math.pi / 2)
+        
+        # Left end: ALWAYS draw as a semi-circle with left_radius
+        # Start at the leftmost point of the top-left semi-circle
+        ctx.move_to(x, y + left_radius)
+        
+        # Draw top-left semi-circle: arc from left (π) to top (3π/2)
+        ctx.arc(x + left_radius, y + left_radius, left_radius, math.pi, 3 * math.pi / 2)
+        
+        # Top edge - go to right side
+        if right_end_flat or width < (left_radius * GUTTER_MULTIPLIER):
+            # Flat right end - go straight to top-right corner
+            ctx.line_to(x + width, y)
+        else:
+            # Rounded right end - go to start of top-right arc
+            ctx.line_to(x + width - right_radius, y)
+            ctx.arc(x + width - right_radius, y + right_radius, right_radius, -math.pi / 2, 0)
+        
+        # Right edge
+        if right_end_flat or width < (left_radius * GUTTER_MULTIPLIER):
+            # Flat right end - straight down
+            ctx.line_to(x + width, y + height)
+        else:
+            # Rounded right end - continue to bottom-right arc
+            ctx.arc(x + width - right_radius, y + height - right_radius, right_radius, 0, math.pi / 2)
+        
+        # Bottom edge - go back to left side
+        ctx.line_to(x + left_radius, y + height)
+        
+        # Left end: bottom-left semi-circle (ALWAYS drawn as semi-circle with left_radius)
+        # Draw from bottom (π/2) to left (π)
+        ctx.arc(x + left_radius, y + height - left_radius, left_radius, math.pi / 2, math.pi)
+        
         ctx.close_path()
     
     def _draw_animated_meter(
@@ -283,26 +411,40 @@ class ImageRenderer:
         bar_width: int,
         meter_y: int,
         meter_height: int,
-        radius: int
+        radius: int,
+        volume_color: tuple[int, int, int, int]
     ) -> None:
         if meter_value <= 0 or fill_width <= 0:
             return
 
-        base_meter_width = int((meter_value / 100.0) * fill_width)
-        meter_x1 = start_x
-        meter_x2 = start_x + base_meter_width
+        # Calculate meter width with margins
+        available_width = fill_width - (METER_HORIZONTAL_MARGIN * GUTTER_MULTIPLIER)
+        if available_width <= 0:
+            return
+            
+        base_meter_width = int((meter_value / VOLUME_PERCENTAGE_MAX) * available_width)
+        meter_x1 = start_x + METER_HORIZONTAL_MARGIN
+        meter_x2 = meter_x1 + base_meter_width
 
         if meter_x2 <= meter_x1 or meter_y < 0:
             return
 
-        meter_x1_inset = max(meter_x1, start_x + 2)
-        meter_x2_inset = min(meter_x2, start_x + bar_width - METER_EDGE_INSET)
-
-        if meter_x2_inset > meter_x1_inset:
+        meter_width = meter_x2 - meter_x1
+        meter_radius = min(meter_height / RADIUS_DIVISOR, BAR_RADIUS)
+        
+        if getattr(self.action, "_meter_invert_color", True):
+            r, g, b, a = volume_color
+            meter_color = (RGB_MAX - r, RGB_MAX - g, RGB_MAX - b, a)
+        else:
             meter_color = self.action._meter_color or COLOR_METER
-            self._set_color(ctx, meter_color)
-            ctx.rectangle(meter_x1_inset, meter_y, meter_x2_inset - meter_x1_inset, meter_height)
-            ctx.fill()
+        
+        # Draw meter with rounded ends (no antialiasing for solid color)
+        ctx.set_antialias(cairo.ANTIALIAS_NONE)  # Disable antialiasing for crisp, solid color
+        self._draw_rounded_rect(ctx, meter_x1, meter_y, meter_width, meter_height, meter_radius, right_end_flat=False)
+        self._set_color(ctx, meter_color)
+        ctx.set_line_width(0)  # Ensure no border/shadow
+        ctx.fill()
+        ctx.set_antialias(cairo.ANTIALIAS_DEFAULT)  # Restore default antialiasing
 
     def _composite_icon(
         self,

@@ -29,7 +29,7 @@
     "ui.custom_icon_file.selected": "Sélectionné: {filename}",
     
     "ui.volume_step.title": "Pas Volume",
-    "ui.volume_step.subtitle": "Changement de volume par pas du cadran (1-20%)",
+    "ui.volume_step.subtitle": "Changement de volume par pas du cadran (5-20%)",
     
     "ui.refresh_devices.button": "Actualiser Périphériques",
     

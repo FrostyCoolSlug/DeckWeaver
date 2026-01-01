@@ -29,7 +29,7 @@
     "ui.custom_icon_file.selected": "Seleccionado: {filename}",
     
     "ui.volume_step.title": "Paso de Volumen",
-    "ui.volume_step.subtitle": "Cambio de volumen por paso del dial (1-20%)",
+    "ui.volume_step.subtitle": "Cambio de volumen por paso del dial (5-20%)",
     
     "ui.refresh_devices.button": "Actualizar Dispositivos",
     

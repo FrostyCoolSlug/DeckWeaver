@@ -25,22 +25,89 @@ DEVICE_TYPE_TARGET: Final[str] = "target"
 # Volume settings
 DEFAULT_VOLUME: Final[int] = 50
 DEFAULT_VOLUME_STEP: Final[int] = 5
-MIN_VOLUME_STEP: Final[int] = 1
+MIN_VOLUME_STEP: Final[int] = 5
 MAX_VOLUME_STEP: Final[int] = 20
 VOLUME_MIN: Final[int] = 0
 VOLUME_MAX: Final[int] = 100
 VOLUME_RAW_MAX: Final[int] = 255
 
 # Image rendering constants
-IMAGE_WIDTH: Final[int] = 480
-IMAGE_HEIGHT: Final[int] = 240
-EDGE_PADDING: Final[int] = 20  # General edge padding
-CORNER_INSET: Final[int] = 28  # Extra inset for rounded corners
-ICON_MAX_SIZE: Final[int] = 105  # Smaller icon to fit within bounds
-BAR_HEIGHT: Final[int] = 32
-BAR_RADIUS: Final[int] = 6
-METER_HEIGHT: Final[int] = 10
-METER_EDGE_INSET: Final[int] = 6
+# Base image dimensions - defines the canvas size for all rendered images
+IMAGE_WIDTH: Final[int] = 480  # Total width of the rendered image
+IMAGE_HEIGHT: Final[int] = 240  # Total height of the rendered image
+
+# Layout spacing constants
+EDGE_PADDING: Final[int] = 20  # General edge padding between icon and volume bar
+CORNER_INSET: Final[int] = 28  # Extra inset from corners for rounded corner elements (icon, bar positioning)
+
+# Icon layout constants
+ICON_MAX_SIZE: Final[int] = 105  # Maximum size (width/height) for the device icon
+
+# Volume bar constants
+BAR_HEIGHT: Final[int] = 32  # Height of the volume bar (not including gutter)
+BAR_RADIUS: Final[int] = 6  # Corner radius for volume bar rounded ends
+BAR_GUTTER_SIZE: Final[int] = 6  # Size of gutter border around volume bar (creates border effect)
+BAR_HORIZONTAL_OFFSET: Final[int] = 0  # Horizontal offset for bar position from calculated left margin
+BAR_VERTICAL_OFFSET: Final[int] = 10  # Vertical offset from bottom edge for bar position
+# Note: Bar width is calculated as: IMAGE_WIDTH - (CORNER_INSET + ICON_MAX_SIZE + EDGE_PADDING) - CORNER_INSET
+# Bar Y position: IMAGE_HEIGHT - BAR_HEIGHT - CORNER_INSET - BAR_VERTICAL_OFFSET
+# Gutter extends BAR_GUTTER_SIZE pixels beyond bar on all sides
+
+# Meter (audio level indicator) constants
+METER_HEIGHT: Final[int] = 10  # Height of the meter bar (drawn inside volume bar)
+METER_HORIZONTAL_MARGIN: Final[int] = 10  # Horizontal margin from volume bar edges (left and right)
+# Meter is vertically centered within the volume bar
+# Meter width is calculated as: (meter_value / 100.0) * (fill_width - METER_HORIZONTAL_MARGIN * 2)
+
+# Service unavailable screen layout
+# Displayed when PipeWeaver daemon is not running
+SERVICE_UNAVAILABLE_TITLE_Y: Final[int] = 60  # Vertical position for "PipeWeaver" title text
+SERVICE_UNAVAILABLE_TITLE_FONT_SIZE: Final[int] = 28  # Font size for title text
+SERVICE_UNAVAILABLE_SUBTITLE_Y: Final[int] = 100  # Vertical position for "Service Unavailable" subtitle
+SERVICE_UNAVAILABLE_SUBTITLE_FONT_SIZE: Final[int] = 18  # Font size for subtitle text
+SERVICE_UNAVAILABLE_HINT_Y: Final[int] = 160  # Vertical position for hint text
+SERVICE_UNAVAILABLE_HINT_FONT_SIZE: Final[int] = 18  # Font size for hint text
+# All text is horizontally centered at IMAGE_WIDTH / 2
+
+# Loading screen layout
+# Displayed when devices are being loaded (spinner animation removed, only text shown)
+LOADING_SPINNER_RADIUS: Final[int] = 20  # Radius of spinner circle (not currently used)
+LOADING_SPINNER_DOT_COUNT: Final[int] = 8  # Number of dots in spinner (not currently used)
+LOADING_SPINNER_DOT_RADIUS: Final[int] = 3  # Radius of each spinner dot (not currently used)
+LOADING_SPINNER_VERTICAL_OFFSET: Final[int] = -30  # Vertical offset from center for spinner (not currently used)
+LOADING_SPINNER_ANGLE_STEP: Final[float] = 0.1  # Animation speed multiplier (not currently used)
+LOADING_SPINNER_ALPHA_MIN: Final[float] = 0.3  # Minimum alpha for spinner dots (not currently used)
+LOADING_SPINNER_ALPHA_MAX: Final[float] = 0.7  # Maximum alpha for spinner dots (not currently used)
+LOADING_TEXT_VERTICAL_OFFSET: Final[int] = 20  # Vertical offset from center for "Loading..." text (not currently used, text is centered)
+LOADING_TEXT_FONT_SIZE: Final[int] = 24  # Font size for "Loading..." text
+LOADING_ANIMATION_FRAMES: Final[int] = 60  # Frames per animation cycle (not currently used)
+# Loading text is centered at (IMAGE_WIDTH / 2, IMAGE_HEIGHT / 2)
+
+# Text rendering constants
+DEFAULT_FONT_SIZE: Final[int] = 24  # Default font size for centered text rendering
+LOADING_TEXT_COLOR: Final[tuple[int, int, int, int]] = (255, 255, 255, 255)  # White color for loading text
+
+# Gutter colors (WCAG AA compliant - ensures 3:1 contrast ratio minimum)
+# Gutter color automatically switches based on volume bar fill color for visibility
+GUTTER_COLOR_DARK: Final[tuple[int, int, int, int]] = (70, 70, 70, 255)  # Dark gutter color (default)
+GUTTER_COLOR_LIGHT: Final[tuple[int, int, int, int]] = (180, 180, 180, 255)  # Light gutter color (used when fill is dark)
+GUTTER_LUMINANCE_THRESHOLD: Final[float] = 0.1  # Relative luminance threshold for dark color detection
+# If fill color luminance < GUTTER_LUMINANCE_THRESHOLD, use light gutter for better contrast
+
+# Volume bar rendering constants
+VOLUME_FULL_TOLERANCE: Final[float] = 0.5  # Floating point tolerance for detecting 100% volume
+# Used to determine if volume bar should have rounded right end (at 100%) or flat end (< 100%)
+VOLUME_PERCENTAGE_MAX: Final[float] = 100.0  # Maximum volume percentage (100%)
+# Used in calculations: effective_fill_width = (volume / VOLUME_PERCENTAGE_MAX) * bar_width
+
+# Color calculation constants (standard RGB/alpha values)
+RGB_MAX: Final[int] = 255  # Maximum RGB/alpha value (0-255 range)
+ALPHA_FULL_OPACITY: Final[int] = 255  # Full opacity alpha value
+# Used for color normalization and alpha channel values
+
+# Mathematical constants for radius calculations
+RADIUS_DIVISOR: Final[int] = 2  # Used to calculate radius from height/width (radius = dimension / RADIUS_DIVISOR)
+GUTTER_MULTIPLIER: Final[int] = 2  # Used to calculate gutter size (gutter extends GUTTER_MULTIPLIER * BAR_GUTTER_SIZE on each side)
 
 # Font paths for monospace fonts
 MONOSPACE_FONT_PATHS: Final[tuple[tuple[str, bool], ...]] = (
