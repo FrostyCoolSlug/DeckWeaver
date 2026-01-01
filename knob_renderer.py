@@ -6,12 +6,24 @@ import cairo  # type: ignore
 from PIL import Image  # type: ignore
 from loguru import logger as log  # type: ignore
 
+from .render_helpers import (
+    IMAGE_WIDTH,
+    IMAGE_HEIGHT,
+    RGB_MAX,
+    ALPHA_FULL_OPACITY,
+    GUTTER_COLOR_DARK,
+    GUTTER_COLOR_LIGHT,
+    GUTTER_LUMINANCE_THRESHOLD,
+    create_cairo_surface,
+    cairo_to_pil,
+    set_cairo_color,
+    draw_text_centered,
+    get_gutter_color,
+    render_service_unavailable_full,
+    render_loading_full,
+    set_image_on_action,
+)
 from .service_monitor import is_service_available
-
-# Image rendering constants
-# Base image dimensions - defines the canvas size for all rendered images
-IMAGE_WIDTH: Final[int] = 480  # Total width of the rendered image in pixels
-IMAGE_HEIGHT: Final[int] = 240  # Total height of the rendered image in pixels
 
 # Layout spacing constants
 # General edge padding between icon and volume bar
@@ -34,40 +46,11 @@ BAR_VERTICAL_OFFSET: Final[int] = 10  # Vertical offset from bottom edge for bar
 METER_HEIGHT: Final[int] = 10  # Height of the meter bar in pixels
 METER_HORIZONTAL_MARGIN: Final[int] = 10  # Horizontal margin from volume bar edges (left and right) in pixels
 
-# Service unavailable screen layout
-# Displayed when PipeWeaver daemon is not running
-SERVICE_UNAVAILABLE_TITLE_Y: Final[int] = 60  # Vertical position for "PipeWeaver" title text in pixels
-SERVICE_UNAVAILABLE_TITLE_FONT_SIZE: Final[int] = 28  # Font size for title text in points
-SERVICE_UNAVAILABLE_SUBTITLE_Y: Final[int] = 100  # Vertical position for "Service Unavailable" subtitle in pixels
-SERVICE_UNAVAILABLE_SUBTITLE_FONT_SIZE: Final[int] = 18  # Font size for subtitle text in points
-SERVICE_UNAVAILABLE_HINT_Y: Final[int] = 160  # Vertical position for hint text in pixels
-SERVICE_UNAVAILABLE_HINT_FONT_SIZE: Final[int] = 18  # Font size for hint text in points
-
-# Loading screen layout
-# Displayed when devices are being loaded
-LOADING_TEXT_FONT_SIZE: Final[int] = 24  # Font size for "Loading..." text in points
-
-# Text rendering constants
-DEFAULT_FONT_SIZE: Final[int] = 24  # Default font size for centered text rendering in points
-LOADING_TEXT_COLOR: Final[tuple[int, int, int, int]] = (255, 255, 255, 255)  # White color (RGBA) for loading text
-
-# Gutter colors (WCAG AA compliant - ensures 3:1 contrast ratio minimum)
-# Gutter color automatically switches based on volume bar fill color for visibility
-GUTTER_COLOR_DARK: Final[tuple[int, int, int, int]] = (70, 70, 70, 255)  # Dark gutter color (default) in RGBA
-GUTTER_COLOR_LIGHT: Final[tuple[int, int, int, int]] = (180, 180, 180, 255)  # Light gutter color (used when fill is dark) in RGBA
-GUTTER_LUMINANCE_THRESHOLD: Final[float] = 0.1  # Relative luminance threshold for dark color detection
-# If fill color luminance < GUTTER_LUMINANCE_THRESHOLD, use light gutter for better contrast
-
 # Volume bar rendering constants
 VOLUME_FULL_TOLERANCE: Final[float] = 0.5  # Floating point tolerance for detecting 100% volume
 # Used to determine if volume bar should have rounded right end (at 100%) or flat end (< 100%)
 VOLUME_PERCENTAGE_MAX: Final[float] = 100.0  # Maximum volume percentage (100%)
 # Used in calculations: effective_fill_width = (volume / VOLUME_PERCENTAGE_MAX) * bar_width
-
-# Color calculation constants (standard RGB/alpha values)
-RGB_MAX: Final[int] = 255  # Maximum RGB/alpha value (0-255 range)
-ALPHA_FULL_OPACITY: Final[int] = 255  # Full opacity alpha value
-# Used for color normalization and alpha channel values
 
 # Mathematical constants for radius calculations
 RADIUS_DIVISOR: Final[int] = 2  # Used to calculate radius from height/width (radius = dimension / RADIUS_DIVISOR)
@@ -78,9 +61,6 @@ COLOR_MUTED_FILL: Final[tuple[int, int, int, int]] = (110, 110, 110, 255)  # Gra
 COLOR_TARGET_FILL: Final[tuple[int, int, int, int]] = (102, 255, 102, 255)  # Green color (RGBA) for target device volume bar fill
 COLOR_SOURCE_FILL: Final[tuple[int, int, int, int]] = (102, 179, 255, 255)  # Blue color (RGBA) for source device volume bar fill
 COLOR_METER: Final[tuple[int, int, int, int]] = (0, 0, 0, 255)  # Black color (RGBA) for audio level meter
-COLOR_SERVICE_UNAVAILABLE_BG: Final[tuple[int, int, int, int]] = (255, 193, 7, 255)  # Amber/yellow background (RGBA) for service unavailable screen
-COLOR_SERVICE_UNAVAILABLE_TEXT: Final[tuple[int, int, int, int]] = (33, 33, 33, 255)  # Dark gray text (RGBA) for service unavailable title
-COLOR_SERVICE_UNAVAILABLE_HINT: Final[tuple[int, int, int, int]] = (66, 66, 66, 255)  # Medium gray text (RGBA) for service unavailable hint
 
 # Device types
 DEVICE_TYPE_SOURCE: Final[str] = "source"  # Device type identifier for input/source devices
@@ -93,18 +73,18 @@ class KnobRenderer:
     def render_image(self):
         if not is_service_available():
             try:
-                image = self._render_service_unavailable()
+                image = render_service_unavailable_full()
                 if image:
-                    self._set_image_on_action(image)
+                    set_image_on_action(self.action, image)
             except Exception as e:
                 log.error(f"Error rendering service unavailable state: {e}")
             return
         
         if getattr(self.action, '_is_loading_devices', False):
             try:
-                image = self._render_loading()
+                image = render_loading_full()
                 if image:
-                    self._set_image_on_action(image)
+                    set_image_on_action(self.action, image)
             except Exception as e:
                 log.error(f"Error rendering loading state: {e}")
             return
@@ -120,137 +100,23 @@ class KnobRenderer:
                 image = self._render_target_device(is_muted)
             
             if image:
-                self._set_image_on_action(image)
+                set_image_on_action(self.action, image)
             else:
                 try:
-                    fallback_image = self._render_service_unavailable()
+                    fallback_image = render_service_unavailable_full()
                     if fallback_image:
-                        self._set_image_on_action(fallback_image)
+                        set_image_on_action(self.action, fallback_image)
                 except Exception:
                     pass
         except Exception as e:
             log.error(f"Error drawing volume bars: {e}")
             try:
-                fallback_image = self._render_service_unavailable()
+                fallback_image = render_service_unavailable_full()
                 if fallback_image:
-                    self._set_image_on_action(fallback_image)
+                    set_image_on_action(self.action, fallback_image)
             except Exception:
                 pass
     
-    def _cairo_to_pil(self, surface: cairo.ImageSurface) -> Image.Image:
-        """Convert Cairo surface to PIL Image"""
-        buf = surface.get_data()
-        width = surface.get_width()
-        height = surface.get_height()
-        stride = surface.get_stride()
-        
-        # Convert ARGB32 to RGBA
-        pil_image = Image.frombuffer(
-            "RGBA", (width, height), buf, "raw", "BGRA", stride, 1
-        )
-        return pil_image
-    
-    def _create_cairo_surface(self, width: int, height: int) -> tuple[cairo.ImageSurface, cairo.Context]:
-        """Create Cairo surface and context"""
-        surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, width, height)
-        ctx = cairo.Context(surface)
-        return surface, ctx
-    
-    def _set_color(self, ctx: cairo.Context, color: tuple[int, int, int, int]):
-        """Set Cairo color from RGBA tuple (0-255)"""
-        r, g, b, a = color
-        ctx.set_source_rgba(r / float(RGB_MAX), g / float(RGB_MAX), b / float(RGB_MAX), a / float(RGB_MAX))
-    
-    def _relative_luminance(self, color: tuple[int, int, int, int]) -> float:
-        """Calculate relative luminance according to WCAG 2.1"""
-        r, g, b, _ = color
-        
-        # Normalize RGB values to 0-1 range
-        def normalize(val):
-            val = val / float(RGB_MAX)
-            if val <= 0.03928:
-                return val / 12.92
-            else:
-                return ((val + 0.055) / 1.055) ** 2.4
-        
-        r_norm = normalize(r)
-        g_norm = normalize(g)
-        b_norm = normalize(b)
-        
-        return 0.2126 * r_norm + 0.7152 * g_norm + 0.0722 * b_norm
-    
-    def _contrast_ratio(self, color1: tuple[int, int, int, int], color2: tuple[int, int, int, int]) -> float:
-        """Calculate contrast ratio between two colors according to WCAG 2.1"""
-        lum1 = self._relative_luminance(color1)
-        lum2 = self._relative_luminance(color2)
-        
-        # Ensure lighter color is in numerator
-        lighter = max(lum1, lum2)
-        darker = min(lum1, lum2)
-        
-        if darker == 0:
-            return float('inf')
-        
-        return (lighter + 0.05) / (darker + 0.05)
-    
-    def _get_gutter_color(self, fill_color: Optional[tuple[int, int, int, int]]) -> tuple[int, int, int, int]:
-        """Get appropriate gutter color based on fill color brightness (WCAG AA compliant)"""
-        # If no fill color or volume is 0, use default dark gutter
-        if not fill_color:
-            return GUTTER_COLOR_DARK
-        
-        # Check if fill color is dark (low luminance)
-        # If fill color is dark, use light gutter for visibility
-        fill_luminance = self._relative_luminance(fill_color)
-        
-        # Use light gutter for dark fill colors
-        if fill_luminance < GUTTER_LUMINANCE_THRESHOLD:
-            return GUTTER_COLOR_LIGHT
-        
-        return GUTTER_COLOR_DARK
-    
-    def _draw_text_centered(self, ctx: cairo.Context, text: str, x: float, y: float, font_size: float = DEFAULT_FONT_SIZE):
-        """Draw centered text at position"""
-        ctx.select_font_face("monospace", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
-        ctx.set_font_size(font_size)
-        extents = ctx.text_extents(text)
-        ctx.move_to(x - extents.width / 2 - extents.x_bearing, y - extents.height / 2 - extents.y_bearing)
-        ctx.show_text(text)
-    
-    def _render_service_unavailable(self) -> Optional[Image.Image]:
-        try:
-            surface, ctx = self._create_cairo_surface(IMAGE_WIDTH, IMAGE_HEIGHT)
-            
-            self._set_color(ctx, COLOR_SERVICE_UNAVAILABLE_BG)
-            ctx.rectangle(0, 0, IMAGE_WIDTH, IMAGE_HEIGHT)
-            ctx.fill()
-            
-            self._set_color(ctx, COLOR_SERVICE_UNAVAILABLE_TEXT)
-            self._draw_text_centered(ctx, "PipeWeaver", IMAGE_WIDTH / 2, SERVICE_UNAVAILABLE_TITLE_Y, SERVICE_UNAVAILABLE_TITLE_FONT_SIZE)
-            
-            self._draw_text_centered(ctx, "Service Unavailable", IMAGE_WIDTH / 2, SERVICE_UNAVAILABLE_SUBTITLE_Y, SERVICE_UNAVAILABLE_SUBTITLE_FONT_SIZE)
-            
-            self._set_color(ctx, COLOR_SERVICE_UNAVAILABLE_HINT)
-            self._draw_text_centered(ctx, "Start PipeWeaver to continue", IMAGE_WIDTH / 2, SERVICE_UNAVAILABLE_HINT_Y, SERVICE_UNAVAILABLE_HINT_FONT_SIZE)
-            
-            return self._cairo_to_pil(surface)
-        except Exception as e:
-            log.error(f"Error rendering service unavailable state: {e}")
-            return None
-    
-    def _render_loading(self) -> Optional[Image.Image]:
-        try:
-            surface, ctx = self._create_cairo_surface(IMAGE_WIDTH, IMAGE_HEIGHT)
-            
-            center_x, center_y = IMAGE_WIDTH / 2, IMAGE_HEIGHT / 2
-            
-            self._set_color(ctx, LOADING_TEXT_COLOR)
-            self._draw_text_centered(ctx, "Loading...", center_x, center_y, LOADING_TEXT_FONT_SIZE)
-            
-            return self._cairo_to_pil(surface)
-        except Exception as e:
-            log.error(f"Error rendering loading state: {e}")
-            return None
     
     def _get_layout_constants(self) -> dict[str, int]:
         icon_left_x = CORNER_INSET
@@ -300,7 +166,7 @@ class KnobRenderer:
         
         try:
             layout = self._get_layout_constants()
-            surface, ctx = self._create_cairo_surface(layout['image_width'], layout['image_height'])
+            surface, ctx = create_cairo_surface(layout['image_width'], layout['image_height'])
             
             # All dimensions come from layout constants (fully parametric)
             bar_x = layout['bar_x']
@@ -333,16 +199,16 @@ class KnobRenderer:
                         fill_color = COLOR_SOURCE_FILL if is_source else COLOR_TARGET_FILL
             
             # Get appropriate gutter color based on fill color contrast (WCAG compliant)
-            gutter_bg = self._get_gutter_color(fill_color)
+            gutter_bg = get_gutter_color(fill_color)
             
             # Draw gutter (larger, creating border effect)
-            self._set_color(ctx, gutter_bg)
+            set_cairo_color(ctx, gutter_bg)
             self._draw_rounded_rect(ctx, gutter_x, gutter_y, gutter_width, gutter_height, gutter_radius)
             ctx.fill()
 
             # Draw fill if there's volume
             if effective_fill_width > 0 and fill_color:
-                self._set_color(ctx, fill_color)
+                set_cairo_color(ctx, fill_color)
                 # Draw volume bar: both ends always semi-circles
                 self._draw_rounded_rect(ctx, bar_x, bar_y, effective_fill_width, bar_height, bar_radius, right_end_flat=False)
                 ctx.fill()
@@ -356,7 +222,7 @@ class KnobRenderer:
                     int(effective_fill_width), int(meter_y), METER_HEIGHT, int(bar_radius), volume_color_for_invert
                 )
             
-            image = self._cairo_to_pil(surface)
+            image = cairo_to_pil(surface)
             self._composite_icon(image, layout['icon_left_x'], layout['icon_bottom_y'], layout['icon_max_size'])
             return image
         except Exception as img_e:
@@ -468,7 +334,7 @@ class KnobRenderer:
         # Draw meter with rounded ends (no antialiasing for solid color)
         ctx.set_antialias(cairo.ANTIALIAS_NONE)  # Disable antialiasing for crisp, solid color
         self._draw_rounded_rect(ctx, meter_x1, meter_y, meter_width, meter_height, meter_radius, right_end_flat=False)
-        self._set_color(ctx, meter_color)
+        set_cairo_color(ctx, meter_color)
         ctx.set_line_width(0)  # Ensure no border/shadow
         ctx.fill()
         ctx.set_antialias(cairo.ANTIALIAS_DEFAULT)  # Restore default antialiasing
@@ -497,18 +363,3 @@ class KnobRenderer:
         except Exception as e:
             log.warning(f"Error compositing icon: {e}")
     
-    def _set_image_on_action(self, image: Image.Image) -> None:
-        try:
-            if image.mode != 'RGBA':
-                image = image.convert('RGBA')
-            
-            materialized_image = image.copy()
-            materialized_image.load()
-            
-            self.action.set_media(image=materialized_image, update=True)
-            
-            dial = self.action.get_input()
-            if dial:
-                dial.update()
-        except Exception as e:
-            log.error(f"Error setting image: {e}")

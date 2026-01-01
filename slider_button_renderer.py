@@ -6,42 +6,21 @@ import cairo  # type: ignore
 from PIL import Image  # type: ignore
 from loguru import logger as log  # type: ignore
 
+from .render_helpers import (
+    IMAGE_WIDTH,
+    RGB_MAX,
+    ALPHA_FULL_OPACITY,
+    create_cairo_surface,
+    cairo_to_pil,
+    set_cairo_color,
+    draw_text_centered,
+    get_gutter_color,
+    render_service_unavailable_button,
+    render_loading_button,
+    get_button_size_from_action,
+    set_image_on_action,
+)
 from .service_monitor import is_service_available
-
-# Image rendering constants
-# Base image dimensions - defines the canvas size for all rendered images
-IMAGE_WIDTH: Final[int] = 480  # Total width of the rendered image in pixels
-IMAGE_HEIGHT: Final[int] = 240  # Total height of the rendered image in pixels
-
-# Layout spacing constants
-# Extra inset from corners for rounded corner elements
-CORNER_INSET: Final[int] = 28  # Distance from edges for corner-positioned elements in pixels
-
-# Service unavailable screen layout
-# Displayed when PipeWeaver daemon is not running
-SERVICE_UNAVAILABLE_TITLE_Y: Final[int] = 60  # Vertical position for "PipeWeaver" title text in pixels
-SERVICE_UNAVAILABLE_TITLE_FONT_SIZE: Final[int] = 28  # Font size for title text in points
-SERVICE_UNAVAILABLE_SUBTITLE_Y: Final[int] = 100  # Vertical position for "Service Unavailable" subtitle in pixels
-SERVICE_UNAVAILABLE_SUBTITLE_FONT_SIZE: Final[int] = 18  # Font size for subtitle text in points
-SERVICE_UNAVAILABLE_HINT_Y: Final[int] = 160  # Vertical position for hint text in pixels
-SERVICE_UNAVAILABLE_HINT_FONT_SIZE: Final[int] = 18  # Font size for hint text in points
-
-# Loading screen layout
-# Displayed when devices are being loaded
-LOADING_TEXT_FONT_SIZE: Final[int] = 24  # Font size for "Loading..." text in points
-
-# Text rendering constants
-DEFAULT_FONT_SIZE: Final[int] = 24  # Default font size for centered text rendering in points
-LOADING_TEXT_COLOR: Final[tuple[int, int, int, int]] = (255, 255, 255, 255)  # White color (RGBA) for loading text
-
-# Color calculation constants (standard RGB/alpha values)
-RGB_MAX: Final[int] = 255  # Maximum RGB/alpha value (0-255 range)
-# Used for color normalization and alpha channel values
-
-# Color constants
-COLOR_SERVICE_UNAVAILABLE_BG: Final[tuple[int, int, int, int]] = (255, 193, 7, 255)  # Amber/yellow background (RGBA) for service unavailable screen
-COLOR_SERVICE_UNAVAILABLE_TEXT: Final[tuple[int, int, int, int]] = (33, 33, 33, 255)  # Dark gray text (RGBA) for service unavailable title
-COLOR_SERVICE_UNAVAILABLE_HINT: Final[tuple[int, int, int, int]] = (66, 66, 66, 255)  # Medium gray text (RGBA) for service unavailable hint
 
 # ============================================================================
 # SLIDER BUTTON RENDERER CONSTANTS - SUPER PARAMETRIC, EASY TO EDIT
@@ -74,27 +53,14 @@ METER_HORIZONTAL_MARGIN: Final[int] = 3  # Horizontal margin from volume bar edg
 # Volume bar rendering constants - EXACT like knob renderer
 VOLUME_PERCENTAGE_MAX: Final[float] = 100.0  # Maximum volume percentage (100%)
 
-# Gutter colors (WCAG AA compliant - ensures 3:1 contrast ratio minimum)
-# Gutter color automatically switches based on slider fill color for visibility
-GUTTER_COLOR_DARK: Final[tuple[int, int, int, int]] = (70, 70, 70, 255)  # Dark gutter color (default) in RGBA
-GUTTER_COLOR_LIGHT: Final[tuple[int, int, int, int]] = (180, 180, 180, 255)  # Light gutter color (used when fill is dark) in RGBA
-GUTTER_LUMINANCE_THRESHOLD: Final[float] = 0.1  # Relative luminance threshold for dark color detection
-# If fill color luminance < GUTTER_LUMINANCE_THRESHOLD, use light gutter for better contrast
-
 # Color constants
 COLOR_MUTED_FILL: Final[tuple[int, int, int, int]] = (110, 110, 110, 255)  # Gray color (RGBA) for muted slider fill
 COLOR_TARGET_FILL: Final[tuple[int, int, int, int]] = (102, 255, 102, 255)  # Green color (RGBA) for target device slider fill
 COLOR_SOURCE_FILL: Final[tuple[int, int, int, int]] = (102, 179, 255, 255)  # Blue color (RGBA) for source device slider fill
 COLOR_METER: Final[tuple[int, int, int, int]] = (0, 0, 0, 255)  # Black color (RGBA) for audio level meter (default, can be overridden)
 
-# Color calculation constants (standard RGB/alpha values)
-RGB_MAX: Final[int] = 255  # Maximum RGB/alpha value (0-255 range)
-ALPHA_FULL_OPACITY: Final[int] = 255  # Full opacity alpha value
-# Used for color normalization and alpha channel values
-
 # Mathematical constants for radius calculations
 RADIUS_DIVISOR: Final[int] = 2  # Used to calculate radius from height/width (radius = dimension / RADIUS_DIVISOR)
-GUTTER_MULTIPLIER: Final[int] = 2  # Used to calculate gutter size (gutter extends GUTTER_MULTIPLIER * BAR_GUTTER_SIZE on each side)
 
 # Device types
 DEVICE_TYPE_SOURCE: Final[str] = "source"  # Device type identifier for input/source devices
@@ -105,23 +71,23 @@ class SliderButtonRenderer:
         self.action = action
         self.is_top = is_top  # True for top button, False for bottom button
         # Get button size - buttons are square, default to 72x72 for standard buttons
-        self.button_size = self._get_button_size()
+        self.button_size = get_button_size_from_action(action)
     
     def render_image(self):
         if not is_service_available():
             try:
-                image = self._render_service_unavailable()
+                image = render_service_unavailable_button(self.button_size)
                 if image:
-                    self._set_image_on_action(image)
+                    set_image_on_action(self.action, image)
             except Exception as e:
                 log.error(f"Error rendering service unavailable state: {e}")
             return
         
         if getattr(self.action, '_is_loading_devices', False):
             try:
-                image = self._render_loading()
+                image = render_loading_button(self.button_size)
                 if image:
-                    self._set_image_on_action(image)
+                    set_image_on_action(self.action, image)
             except Exception as e:
                 log.error(f"Error rendering loading state: {e}")
             return
@@ -132,131 +98,23 @@ class SliderButtonRenderer:
         try:
             image = self._render_slider()
             if image:
-                self._set_image_on_action(image)
+                set_image_on_action(self.action, image)
             else:
                 try:
-                    fallback_image = self._render_service_unavailable()
+                    fallback_image = render_service_unavailable_button(self.button_size)
                     if fallback_image:
-                        self._set_image_on_action(fallback_image)
+                        set_image_on_action(self.action, fallback_image)
                 except Exception:
                     pass
         except Exception as e:
             log.error(f"Error drawing slider: {e}")
             try:
-                fallback_image = self._render_service_unavailable()
+                fallback_image = render_service_unavailable_button(self.button_size)
                 if fallback_image:
-                    self._set_image_on_action(fallback_image)
+                    set_image_on_action(self.action, fallback_image)
             except Exception:
                 pass
     
-    def _cairo_to_pil(self, surface: cairo.ImageSurface) -> Image.Image:
-        """Convert Cairo surface to PIL Image"""
-        buf = surface.get_data()
-        width = surface.get_width()
-        height = surface.get_height()
-        stride = surface.get_stride()
-        
-        # Convert ARGB32 to RGBA
-        pil_image = Image.frombuffer(
-            "RGBA", (width, height), buf, "raw", "BGRA", stride, 1
-        )
-        return pil_image
-    
-    def _create_cairo_surface(self, width: int, height: int) -> tuple[cairo.ImageSurface, cairo.Context]:
-        """Create Cairo surface and context"""
-        surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, width, height)
-        ctx = cairo.Context(surface)
-        return surface, ctx
-    
-    def _set_color(self, ctx: cairo.Context, color: tuple[int, int, int, int]):
-        """Set Cairo color from RGBA tuple (0-255)"""
-        r, g, b, a = color
-        ctx.set_source_rgba(r / float(RGB_MAX), g / float(RGB_MAX), b / float(RGB_MAX), a / float(RGB_MAX))
-    
-    def _relative_luminance(self, color: tuple[int, int, int, int]) -> float:
-        """Calculate relative luminance according to WCAG 2.1"""
-        r, g, b, _ = color
-        
-        # Normalize RGB values to 0-1 range
-        def normalize(val):
-            val = val / float(RGB_MAX)
-            if val <= 0.03928:
-                return val / 12.92
-            else:
-                return ((val + 0.055) / 1.055) ** 2.4
-        
-        r_norm = normalize(r)
-        g_norm = normalize(g)
-        b_norm = normalize(b)
-        
-        return 0.2126 * r_norm + 0.7152 * g_norm + 0.0722 * b_norm
-    
-    def _get_gutter_color(self, fill_color: Optional[tuple[int, int, int, int]]) -> tuple[int, int, int, int]:
-        """Get appropriate gutter color based on fill color brightness (WCAG AA compliant)"""
-        # If no fill color or volume is 0, use default dark gutter
-        if not fill_color:
-            return GUTTER_COLOR_DARK
-        
-        # Check if fill color is dark (low luminance)
-        # If fill color is dark, use light gutter for visibility
-        fill_luminance = self._relative_luminance(fill_color)
-        
-        # Use light gutter for dark fill colors
-        if fill_luminance < GUTTER_LUMINANCE_THRESHOLD:
-            return GUTTER_COLOR_LIGHT
-        
-        return GUTTER_COLOR_DARK
-    
-    def _draw_text_centered(self, ctx: cairo.Context, text: str, x: float, y: float, font_size: float = DEFAULT_FONT_SIZE):
-        """Draw centered text at position"""
-        ctx.select_font_face("monospace", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
-        ctx.set_font_size(font_size)
-        extents = ctx.text_extents(text)
-        ctx.move_to(x - extents.width / 2 - extents.x_bearing, y - extents.height / 2 - extents.y_bearing)
-        ctx.show_text(text)
-    
-    def _render_service_unavailable(self) -> Optional[Image.Image]:
-        try:
-            size = self.button_size
-            surface, ctx = self._create_cairo_surface(size, size)
-            
-            self._set_color(ctx, COLOR_SERVICE_UNAVAILABLE_BG)
-            ctx.rectangle(0, 0, size, size)
-            ctx.fill()
-            
-            self._set_color(ctx, COLOR_SERVICE_UNAVAILABLE_TEXT)
-            # Scale font sizes for button
-            title_font = max(14, int(SERVICE_UNAVAILABLE_TITLE_FONT_SIZE * size / IMAGE_WIDTH))
-            subtitle_font = max(10, int(SERVICE_UNAVAILABLE_SUBTITLE_FONT_SIZE * size / IMAGE_WIDTH))
-            hint_font = max(10, int(SERVICE_UNAVAILABLE_HINT_FONT_SIZE * size / IMAGE_WIDTH))
-            
-            self._draw_text_centered(ctx, "PipeWeaver", size / 2, size * 0.25, title_font)
-            self._draw_text_centered(ctx, "Service", size / 2, size * 0.42, subtitle_font)
-            self._draw_text_centered(ctx, "Unavailable", size / 2, size * 0.58, subtitle_font)
-            
-            self._set_color(ctx, COLOR_SERVICE_UNAVAILABLE_HINT)
-            self._draw_text_centered(ctx, "Start PipeWeaver", size / 2, size * 0.75, hint_font)
-            
-            return self._cairo_to_pil(surface)
-        except Exception as e:
-            log.error(f"Error rendering service unavailable state: {e}")
-            return None
-    
-    def _render_loading(self) -> Optional[Image.Image]:
-        try:
-            size = self.button_size
-            surface, ctx = self._create_cairo_surface(size, size)
-            
-            center_x, center_y = size / 2, size / 2
-            
-            self._set_color(ctx, LOADING_TEXT_COLOR)
-            font_size = max(12, int(LOADING_TEXT_FONT_SIZE * size / IMAGE_WIDTH))
-            self._draw_text_centered(ctx, "Loading...", center_x, center_y, font_size)
-            
-            return self._cairo_to_pil(surface)
-        except Exception as e:
-            log.error(f"Error rendering loading state: {e}")
-            return None
     
     def _draw_rounded_rect_vertical(
         self,
@@ -367,7 +225,7 @@ class SliderButtonRenderer:
         # Draw meter with rounded ends (no antialiasing for solid color)
         ctx.set_antialias(cairo.ANTIALIAS_NONE)  # Disable antialiasing for crisp, solid color
         self._draw_rounded_rect_vertical(ctx, meter_x, meter_y1, meter_width, meter_height, meter_radius, top_end_flat=False)
-        self._set_color(ctx, meter_color)
+        set_cairo_color(ctx, meter_color)
         ctx.set_line_width(0)  # Ensure no border/shadow
         ctx.fill()
         ctx.set_antialias(cairo.ANTIALIAS_DEFAULT)  # Restore default antialiasing
@@ -421,7 +279,7 @@ class SliderButtonRenderer:
             
             # Render at 2x resolution for smooth edges, then scale down
             scale_factor = 2
-            surface, ctx = self._create_cairo_surface(size * scale_factor, double_height * scale_factor)
+            surface, ctx = create_cairo_surface(size * scale_factor, double_height * scale_factor)
             ctx.scale(scale_factor, scale_factor)  # Scale coordinate system
             # Enable high-quality antialiasing for smooth rounded edges
             ctx.set_antialias(cairo.ANTIALIAS_BEST)
@@ -462,16 +320,16 @@ class SliderButtonRenderer:
                         fill_color = COLOR_SOURCE_FILL if is_source else COLOR_TARGET_FILL
             
             # Get appropriate gutter color based on fill color contrast (WCAG compliant) - EXACT like knob renderer
-            gutter_bg = self._get_gutter_color(fill_color)
+            gutter_bg = get_gutter_color(fill_color)
             
             # Draw gutter (larger, creating border effect) - EXACT like knob renderer
-            self._set_color(ctx, gutter_bg)
+            set_cairo_color(ctx, gutter_bg)
             self._draw_rounded_rect_vertical(ctx, gutter_x, gutter_y, gutter_width, gutter_height, gutter_radius)
             ctx.fill()
             
             # Draw fill if there's volume - EXACT like knob renderer
             if effective_fill_height > 0 and fill_color:
-                self._set_color(ctx, fill_color)
+                set_cairo_color(ctx, fill_color)
                 # Draw volume bar: both ends always semi-circles (like knob renderer: right_end_flat=False)
                 slider_fill_y = slider_y + slider_height - effective_fill_height  # Fill from bottom up
                 self._draw_rounded_rect_vertical(ctx, slider_x, slider_fill_y, slider_width, effective_fill_height, slider_radius, top_end_flat=False)
@@ -490,7 +348,7 @@ class SliderButtonRenderer:
                 )
             
             # Convert to PIL image, scale down, and crop
-            full_image = self._cairo_to_pil(surface)
+            full_image = cairo_to_pil(surface)
             # Scale down from 2x resolution to 1x for crisp rendering
             full_image = full_image.resize((size, double_height), Image.Resampling.LANCZOS)
             
@@ -503,37 +361,3 @@ class SliderButtonRenderer:
             log.error(f"Error creating slider image: {img_e}")
             return None
     
-    def _get_button_size(self) -> int:
-        """Get the actual button size from the action, default to 72 for standard buttons"""
-        try:
-            button = self.action.get_input()
-            if button and hasattr(button, 'get_size'):
-                size = button.get_size()
-                if size and len(size) >= 2:
-                    # Buttons are square, use the smaller dimension or average
-                    return min(size[0], size[1]) if size[0] != size[1] else size[0]
-            # Try to get from action if available
-            if hasattr(self.action, 'button_size'):
-                return self.action.button_size
-            if hasattr(self.action, 'get_button_size'):
-                return self.action.get_button_size()
-        except Exception:
-            pass
-        # Default to 72x72 for standard Stream Deck buttons
-        return 72
-    
-    def _set_image_on_action(self, image: Image.Image) -> None:
-        try:
-            if image.mode != 'RGBA':
-                image = image.convert('RGBA')
-            
-            materialized_image = image.copy()
-            materialized_image.load()
-            
-            self.action.set_media(image=materialized_image, update=True)
-            
-            button = self.action.get_input()
-            if button:
-                button.update()
-        except Exception as e:
-            log.error(f"Error setting image: {e}")
