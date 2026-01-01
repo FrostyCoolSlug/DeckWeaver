@@ -16,6 +16,8 @@ from src.backend.PluginManager.PluginBase import PluginBase  # type: ignore
 from .knob_action import PipeWeaverKnobAction
 from .volume_up_button_action import PipeWeaverVolumeUpButtonAction
 from .volume_down_button_action import PipeWeaverVolumeDownButtonAction
+from .slider_top_button_action import PipeWeaverSliderTopButtonAction
+from .slider_bottom_button_action import PipeWeaverSliderBottomButtonAction
 from .service_monitor import start_monitor, stop_monitor
 
 
@@ -65,6 +67,7 @@ class DeckWeaver(PluginBase):
             self.load_icon_assets()
             self._register_knob_action()
             self._register_volume_button_actions()
+            self._register_slider_button_actions()
         except Exception as e:
             log.error(f"Error registering actions: {e}")
     
@@ -108,6 +111,33 @@ class DeckWeaver(PluginBase):
             }
         )
         self.add_action_holder(vol_down_holder)
+    
+    def _register_slider_button_actions(self) -> None:
+        slider_top_holder = ActionHolder(
+            plugin_base=self,
+            action_base=PipeWeaverSliderTopButtonAction,
+            action_id_suffix="SliderTop",
+            action_name=self.lm.get("actions.slider_top.name", "Slider Top"),
+            action_support={
+                Input.Key: ActionInputSupport.SUPPORTED,
+                Input.Dial: ActionInputSupport.UNSUPPORTED,
+                Input.Touchscreen: ActionInputSupport.SUPPORTED
+            }
+        )
+        self.add_action_holder(slider_top_holder)
+        
+        slider_bottom_holder = ActionHolder(
+            plugin_base=self,
+            action_base=PipeWeaverSliderBottomButtonAction,
+            action_id_suffix="SliderBottom",
+            action_name=self.lm.get("actions.slider_bottom.name", "Slider Bottom"),
+            action_support={
+                Input.Key: ActionInputSupport.SUPPORTED,
+                Input.Dial: ActionInputSupport.UNSUPPORTED,
+                Input.Touchscreen: ActionInputSupport.SUPPORTED
+            }
+        )
+        self.add_action_holder(slider_bottom_holder)
     
     def load_icon_assets(self) -> None:
         try:

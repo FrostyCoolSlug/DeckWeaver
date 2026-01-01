@@ -984,11 +984,18 @@ class PipeWeaverAction(ActionBase):
                 # Use appropriate renderer based on action type
                 from .volume_up_button_action import PipeWeaverVolumeUpButtonAction
                 from .volume_down_button_action import PipeWeaverVolumeDownButtonAction
+                from .slider_top_button_action import PipeWeaverSliderTopButtonAction
+                from .slider_bottom_button_action import PipeWeaverSliderBottomButtonAction
+                from .slider_button_renderer import SliderButtonRenderer
                 
                 if isinstance(self, PipeWeaverVolumeUpButtonAction):
                     image_renderer = VolumeButtonRenderer(self, is_plus=True)
                 elif isinstance(self, PipeWeaverVolumeDownButtonAction):
                     image_renderer = VolumeButtonRenderer(self, is_plus=False)
+                elif isinstance(self, PipeWeaverSliderTopButtonAction):
+                    image_renderer = SliderButtonRenderer(self, is_top=True)
+                elif isinstance(self, PipeWeaverSliderBottomButtonAction):
+                    image_renderer = SliderButtonRenderer(self, is_top=False)
                 else:
                     image_renderer = KnobRenderer(self)
                 
