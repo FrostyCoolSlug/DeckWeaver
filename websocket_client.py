@@ -419,9 +419,6 @@ class PipeWeaverWebSocketClient:
     def _get_devices_tree(self) -> DevicesTree:
         return get_devices_tree(self._get_status())
     
-    def get_devices(self) -> list[dict[str, str]]:
-        return get_device_list(self._get_devices_tree())
-    
     def _get_device_type(self, device_id: str) -> Optional[str]:
         devices_tree = self._get_devices_tree()
         if not devices_tree:

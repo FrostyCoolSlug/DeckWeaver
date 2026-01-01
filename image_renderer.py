@@ -29,17 +29,8 @@ from .constants import (
     ICON_MAX_SIZE,
     IMAGE_HEIGHT,
     IMAGE_WIDTH,
-    LOADING_ANIMATION_FRAMES,
-    LOADING_SPINNER_ALPHA_MAX,
-    LOADING_SPINNER_ALPHA_MIN,
-    LOADING_SPINNER_ANGLE_STEP,
-    LOADING_SPINNER_DOT_COUNT,
-    LOADING_SPINNER_DOT_RADIUS,
-    LOADING_SPINNER_RADIUS,
-    LOADING_SPINNER_VERTICAL_OFFSET,
     LOADING_TEXT_COLOR,
     LOADING_TEXT_FONT_SIZE,
-    LOADING_TEXT_VERTICAL_OFFSET,
     METER_HEIGHT,
     METER_HORIZONTAL_MARGIN,
     RADIUS_DIVISOR,
@@ -61,7 +52,6 @@ from .service_monitor import is_service_available
 class ImageRenderer:
     def __init__(self, action):
         self.action = action
-        self._loading_frame = 0
     
     def render_image(self):
         if not is_service_available():

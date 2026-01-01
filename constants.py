@@ -70,17 +70,8 @@ SERVICE_UNAVAILABLE_HINT_FONT_SIZE: Final[int] = 18  # Font size for hint text
 # All text is horizontally centered at IMAGE_WIDTH / 2
 
 # Loading screen layout
-# Displayed when devices are being loaded (spinner animation removed, only text shown)
-LOADING_SPINNER_RADIUS: Final[int] = 20  # Radius of spinner circle (not currently used)
-LOADING_SPINNER_DOT_COUNT: Final[int] = 8  # Number of dots in spinner (not currently used)
-LOADING_SPINNER_DOT_RADIUS: Final[int] = 3  # Radius of each spinner dot (not currently used)
-LOADING_SPINNER_VERTICAL_OFFSET: Final[int] = -30  # Vertical offset from center for spinner (not currently used)
-LOADING_SPINNER_ANGLE_STEP: Final[float] = 0.1  # Animation speed multiplier (not currently used)
-LOADING_SPINNER_ALPHA_MIN: Final[float] = 0.3  # Minimum alpha for spinner dots (not currently used)
-LOADING_SPINNER_ALPHA_MAX: Final[float] = 0.7  # Maximum alpha for spinner dots (not currently used)
-LOADING_TEXT_VERTICAL_OFFSET: Final[int] = 20  # Vertical offset from center for "Loading..." text (not currently used, text is centered)
+# Displayed when devices are being loaded
 LOADING_TEXT_FONT_SIZE: Final[int] = 24  # Font size for "Loading..." text
-LOADING_ANIMATION_FRAMES: Final[int] = 60  # Frames per animation cycle (not currently used)
 # Loading text is centered at (IMAGE_WIDTH / 2, IMAGE_HEIGHT / 2)
 
 # Text rendering constants
@@ -109,35 +100,11 @@ ALPHA_FULL_OPACITY: Final[int] = 255  # Full opacity alpha value
 RADIUS_DIVISOR: Final[int] = 2  # Used to calculate radius from height/width (radius = dimension / RADIUS_DIVISOR)
 GUTTER_MULTIPLIER: Final[int] = 2  # Used to calculate gutter size (gutter extends GUTTER_MULTIPLIER * BAR_GUTTER_SIZE on each side)
 
-# Font paths for monospace fonts
-MONOSPACE_FONT_PATHS: Final[tuple[tuple[str, bool], ...]] = (
-    ("/usr/share/fonts/truetype/jetbrains-mono/JetBrainsMono-Bold.ttf", True),
-    ("/usr/share/fonts/truetype/source-code-pro/SourceCodePro-Bold.ttf", True),
-    ("/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf", True),
-    ("/usr/share/fonts/truetype/liberation/LiberationMono-Bold.ttf", True),
-    ("/usr/share/fonts/truetype/ubuntu/UbuntuMono-Bold.ttf", True),
-    ("/usr/share/fonts/truetype/fira-code/FiraCode-Bold.ttf", True),
-    ("/usr/share/fonts/truetype/jetbrains-mono/JetBrainsMono-Regular.ttf", False),
-    ("/usr/share/fonts/truetype/source-code-pro/SourceCodePro-Regular.ttf", False),
-    ("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", False),
-    ("/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf", False),
-    ("/usr/share/fonts/TTF/arial.ttf", False),
-    ("/System/Library/Fonts/Monaco.ttf", False),
-    ("C:/Windows/Fonts/consola.ttf", False),
-)
-
 # Color constants
-COLOR_BACKGROUND_DARK: Final[tuple[int, int, int, int]] = (30, 30, 30, 255)
-COLOR_OUTLINE_GRAY: Final[tuple[int, int, int, int]] = (60, 60, 60, 255)
-COLOR_MUTED_BG: Final[tuple[int, int, int, int]] = (38, 38, 38, 255)
 COLOR_MUTED_FILL: Final[tuple[int, int, int, int]] = (110, 110, 110, 255)
-COLOR_MUTED_OUTLINE: Final[tuple[int, int, int, int]] = (77, 77, 77, 255)
-COLOR_TARGET_BG: Final[tuple[int, int, int, int]] = (20, 38, 20, 255)
-COLOR_TARGET_OUTLINE: Final[tuple[int, int, int, int]] = (102, 204, 102, 255)
 COLOR_TARGET_FILL: Final[tuple[int, int, int, int]] = (102, 255, 102, 255)
 COLOR_SOURCE_FILL: Final[tuple[int, int, int, int]] = (102, 179, 255, 255)
 COLOR_METER: Final[tuple[int, int, int, int]] = (0, 0, 0, 255)
-COLOR_LABEL: Final[tuple[int, int, int, int]] = (204, 204, 204, 204)
 COLOR_SERVICE_UNAVAILABLE_BG: Final[tuple[int, int, int, int]] = (255, 193, 7, 255)
 COLOR_SERVICE_UNAVAILABLE_TEXT: Final[tuple[int, int, int, int]] = (33, 33, 33, 255)
 COLOR_SERVICE_UNAVAILABLE_HINT: Final[tuple[int, int, int, int]] = (66, 66, 66, 255)
