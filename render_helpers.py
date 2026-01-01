@@ -5,44 +5,30 @@ import cairo  # type: ignore
 from PIL import Image  # type: ignore
 from loguru import logger as log  # type: ignore
 
-# Image rendering constants
-# Base image dimensions - defines the canvas size for all rendered images
-IMAGE_WIDTH: Final[int] = 480  # Total width of the rendered image in pixels
-IMAGE_HEIGHT: Final[int] = 240  # Total height of the rendered image in pixels
+IMAGE_WIDTH: Final[int] = 480
+IMAGE_HEIGHT: Final[int] = 240
 
-# Service unavailable screen layout
-# Displayed when PipeWeaver daemon is not running
-SERVICE_UNAVAILABLE_TITLE_Y: Final[int] = 60  # Vertical position for "PipeWeaver" title text in pixels
-SERVICE_UNAVAILABLE_TITLE_FONT_SIZE: Final[int] = 28  # Font size for title text in points
-SERVICE_UNAVAILABLE_SUBTITLE_Y: Final[int] = 100  # Vertical position for "Service Unavailable" subtitle in pixels
-SERVICE_UNAVAILABLE_SUBTITLE_FONT_SIZE: Final[int] = 18  # Font size for subtitle text in points
-SERVICE_UNAVAILABLE_HINT_Y: Final[int] = 160  # Vertical position for hint text in pixels
-SERVICE_UNAVAILABLE_HINT_FONT_SIZE: Final[int] = 18  # Font size for hint text in points
+SERVICE_UNAVAILABLE_TITLE_Y: Final[int] = 60
+SERVICE_UNAVAILABLE_TITLE_FONT_SIZE: Final[int] = 28
+SERVICE_UNAVAILABLE_SUBTITLE_Y: Final[int] = 100
+SERVICE_UNAVAILABLE_SUBTITLE_FONT_SIZE: Final[int] = 18
+SERVICE_UNAVAILABLE_HINT_Y: Final[int] = 160
+SERVICE_UNAVAILABLE_HINT_FONT_SIZE: Final[int] = 18
 
-# Loading screen layout
-# Displayed when devices are being loaded
-LOADING_TEXT_FONT_SIZE: Final[int] = 24  # Font size for "Loading..." text in points
+LOADING_TEXT_FONT_SIZE: Final[int] = 24
+DEFAULT_FONT_SIZE: Final[int] = 24
+LOADING_TEXT_COLOR: Final[tuple[int, int, int, int]] = (255, 255, 255, 255)
 
-# Text rendering constants
-DEFAULT_FONT_SIZE: Final[int] = 24  # Default font size for centered text rendering in points
-LOADING_TEXT_COLOR: Final[tuple[int, int, int, int]] = (255, 255, 255, 255)  # White color (RGBA) for loading text
+RGB_MAX: Final[int] = 255
+ALPHA_FULL_OPACITY: Final[int] = 255
 
-# Color calculation constants (standard RGB/alpha values)
-RGB_MAX: Final[int] = 255  # Maximum RGB/alpha value (0-255 range)
-ALPHA_FULL_OPACITY: Final[int] = 255  # Full opacity alpha value
-# Used for color normalization and alpha channel values
+COLOR_SERVICE_UNAVAILABLE_BG: Final[tuple[int, int, int, int]] = (255, 193, 7, 255)
+COLOR_SERVICE_UNAVAILABLE_TEXT: Final[tuple[int, int, int, int]] = (33, 33, 33, 255)
+COLOR_SERVICE_UNAVAILABLE_HINT: Final[tuple[int, int, int, int]] = (66, 66, 66, 255)
 
-# Color constants
-COLOR_SERVICE_UNAVAILABLE_BG: Final[tuple[int, int, int, int]] = (255, 193, 7, 255)  # Amber/yellow background (RGBA) for service unavailable screen
-COLOR_SERVICE_UNAVAILABLE_TEXT: Final[tuple[int, int, int, int]] = (33, 33, 33, 255)  # Dark gray text (RGBA) for service unavailable title
-COLOR_SERVICE_UNAVAILABLE_HINT: Final[tuple[int, int, int, int]] = (66, 66, 66, 255)  # Medium gray text (RGBA) for service unavailable hint
-
-# Gutter colors (WCAG AA compliant - ensures 3:1 contrast ratio minimum)
-# Gutter color automatically switches based on volume bar fill color for visibility
-GUTTER_COLOR_DARK: Final[tuple[int, int, int, int]] = (70, 70, 70, 255)  # Dark gutter color (default) in RGBA
-GUTTER_COLOR_LIGHT: Final[tuple[int, int, int, int]] = (180, 180, 180, 255)  # Light gutter color (used when fill is dark) in RGBA
-GUTTER_LUMINANCE_THRESHOLD: Final[float] = 0.1  # Relative luminance threshold for dark color detection
-# If fill color luminance < GUTTER_LUMINANCE_THRESHOLD, use light gutter for better contrast
+GUTTER_COLOR_DARK: Final[tuple[int, int, int, int]] = (70, 70, 70, 255)
+GUTTER_COLOR_LIGHT: Final[tuple[int, int, int, int]] = (180, 180, 180, 255)
+GUTTER_LUMINANCE_THRESHOLD: Final[float] = 0.1
 
 
 def cairo_to_pil(surface: cairo.ImageSurface) -> Image.Image:
@@ -52,7 +38,6 @@ def cairo_to_pil(surface: cairo.ImageSurface) -> Image.Image:
     height = surface.get_height()
     stride = surface.get_stride()
     
-    # Convert ARGB32 to RGBA
     pil_image = Image.frombuffer(
         "RGBA", (width, height), buf, "raw", "BGRA", stride, 1
     )
@@ -102,15 +87,10 @@ def relative_luminance(color: tuple[int, int, int, int]) -> float:
 
 def get_gutter_color(fill_color: Optional[tuple[int, int, int, int]]) -> tuple[int, int, int, int]:
     """Get appropriate gutter color based on fill color brightness (WCAG AA compliant)"""
-    # If no fill color or volume is 0, use default dark gutter
     if not fill_color:
         return GUTTER_COLOR_DARK
     
-    # Check if fill color is dark (low luminance)
-    # If fill color is dark, use light gutter for visibility
     fill_luminance = relative_luminance(fill_color)
-    
-    # Use light gutter for dark fill colors
     if fill_luminance < GUTTER_LUMINANCE_THRESHOLD:
         return GUTTER_COLOR_LIGHT
     
@@ -153,7 +133,6 @@ def render_service_unavailable_button(button_size: int) -> Optional[Image.Image]
         ctx.fill()
         
         set_cairo_color(ctx, COLOR_SERVICE_UNAVAILABLE_TEXT)
-        # Scale font sizes for button
         title_font = max(14, int(SERVICE_UNAVAILABLE_TITLE_FONT_SIZE * button_size / IMAGE_WIDTH))
         subtitle_font = max(10, int(SERVICE_UNAVAILABLE_SUBTITLE_FONT_SIZE * button_size / IMAGE_WIDTH))
         hint_font = max(10, int(SERVICE_UNAVAILABLE_HINT_FONT_SIZE * button_size / IMAGE_WIDTH))
@@ -214,16 +193,13 @@ def get_button_size_from_action(action) -> int:
         if button and hasattr(button, 'get_size'):
             size = button.get_size()
             if size and len(size) >= 2:
-                # Buttons are square, use the smaller dimension or average
                 return min(size[0], size[1]) if size[0] != size[1] else size[0]
-        # Try to get from action if available
         if hasattr(action, 'button_size'):
             return action.button_size
         if hasattr(action, 'get_button_size'):
             return action.get_button_size()
     except Exception:
         pass
-    # Default to 72x72 for standard Stream Deck buttons
     return 72
 
 

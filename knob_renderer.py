@@ -25,45 +25,32 @@ from .render_helpers import (
 )
 from .service_monitor import is_service_available
 
-# Layout spacing constants
-# General edge padding between icon and volume bar
-EDGE_PADDING: Final[int] = 20  # Horizontal spacing between icon and volume bar in pixels
-# Extra inset from corners for rounded corner elements (icon, bar positioning)
-CORNER_INSET: Final[int] = 28  # Distance from edges for corner-positioned elements in pixels
+EDGE_PADDING: Final[int] = 20
+CORNER_INSET: Final[int] = 28
 
-# Icon layout constants
-ICON_MAX_SIZE: Final[int] = 105  # Maximum size (width/height) for the device icon in pixels
+ICON_MAX_SIZE: Final[int] = 105
 
-# Volume bar constants
-BAR_HEIGHT: Final[int] = 32  # Height of the volume bar (not including gutter) in pixels
-BAR_RADIUS: Final[int] = 6  # Corner radius for volume bar rounded ends in pixels
-BAR_GUTTER_SIZE: Final[int] = 6  # Size of gutter border around volume bar (creates border effect) in pixels
-BAR_HORIZONTAL_OFFSET: Final[int] = 0  # Horizontal offset for bar position from calculated left margin in pixels
-BAR_VERTICAL_OFFSET: Final[int] = 10  # Vertical offset from bottom edge for bar position in pixels
+BAR_HEIGHT: Final[int] = 32
+BAR_RADIUS: Final[int] = 6
+BAR_GUTTER_SIZE: Final[int] = 6
+BAR_HORIZONTAL_OFFSET: Final[int] = 0
+BAR_VERTICAL_OFFSET: Final[int] = 10
 
-# Meter constants
-# Meter (audio level indicator) constants - drawn inside volume bar
-METER_HEIGHT: Final[int] = 10  # Height of the meter bar in pixels
-METER_HORIZONTAL_MARGIN: Final[int] = 10  # Horizontal margin from volume bar edges (left and right) in pixels
+METER_HEIGHT: Final[int] = 10
+METER_HORIZONTAL_MARGIN: Final[int] = 10
 
-# Volume bar rendering constants
-VOLUME_FULL_TOLERANCE: Final[float] = 0.5  # Floating point tolerance for detecting 100% volume
-# Used to determine if volume bar should have rounded right end (at 100%) or flat end (< 100%)
-VOLUME_PERCENTAGE_MAX: Final[float] = 100.0  # Maximum volume percentage (100%)
-# Used in calculations: effective_fill_width = (volume / VOLUME_PERCENTAGE_MAX) * bar_width
+VOLUME_FULL_TOLERANCE: Final[float] = 0.5
+VOLUME_PERCENTAGE_MAX: Final[float] = 100.0
 
-# Mathematical constants for radius calculations
-RADIUS_DIVISOR: Final[int] = 2  # Used to calculate radius from height/width (radius = dimension / RADIUS_DIVISOR)
-GUTTER_MULTIPLIER: Final[int] = 2  # Used to calculate gutter size (gutter extends GUTTER_MULTIPLIER * BAR_GUTTER_SIZE on each side)
+RADIUS_DIVISOR: Final[int] = 2
+GUTTER_MULTIPLIER: Final[int] = 2
 
-# Color constants
-COLOR_MUTED_FILL: Final[tuple[int, int, int, int]] = (110, 110, 110, 255)  # Gray color (RGBA) for muted volume bar fill
-COLOR_TARGET_FILL: Final[tuple[int, int, int, int]] = (102, 255, 102, 255)  # Green color (RGBA) for target device volume bar fill
-COLOR_SOURCE_FILL: Final[tuple[int, int, int, int]] = (102, 179, 255, 255)  # Blue color (RGBA) for source device volume bar fill
-COLOR_METER: Final[tuple[int, int, int, int]] = (0, 0, 0, 255)  # Black color (RGBA) for audio level meter
+COLOR_MUTED_FILL: Final[tuple[int, int, int, int]] = (110, 110, 110, 255)
+COLOR_TARGET_FILL: Final[tuple[int, int, int, int]] = (102, 255, 102, 255)
+COLOR_SOURCE_FILL: Final[tuple[int, int, int, int]] = (102, 179, 255, 255)
+COLOR_METER: Final[tuple[int, int, int, int]] = (0, 0, 0, 255)
 
-# Device types
-DEVICE_TYPE_SOURCE: Final[str] = "source"  # Device type identifier for input/source devices
+DEVICE_TYPE_SOURCE: Final[str] = "source"
 
 
 class KnobRenderer:
@@ -126,11 +113,7 @@ class KnobRenderer:
         right_margin = CORNER_INSET
         bar_width = IMAGE_WIDTH - left_margin - right_margin
         bar_y = IMAGE_HEIGHT - BAR_HEIGHT - CORNER_INSET - BAR_VERTICAL_OFFSET
-        
-        # Bar position (volume bar inside gutter)
         bar_x = left_margin + BAR_HORIZONTAL_OFFSET
-        
-        # Gutter dimensions (larger than bar to create border effect)
         gutter_x = bar_x - BAR_GUTTER_SIZE
         gutter_y = bar_y - BAR_GUTTER_SIZE
         gutter_width = bar_width + (BAR_GUTTER_SIZE * GUTTER_MULTIPLIER)
@@ -168,7 +151,6 @@ class KnobRenderer:
             layout = self._get_layout_constants()
             surface, ctx = create_cairo_surface(layout['image_width'], layout['image_height'])
             
-            # All dimensions come from layout constants (fully parametric)
             bar_x = layout['bar_x']
             bar_y = layout['bar_y']
             bar_width = layout['bar_width']
@@ -183,7 +165,6 @@ class KnobRenderer:
 
             effective_fill_width = (volume / VOLUME_PERCENTAGE_MAX) * bar_width
             
-            # Determine fill color first (needed for WCAG contrast check)
             fill_color = None
             if effective_fill_width > 0:
                 if is_muted:
@@ -198,18 +179,13 @@ class KnobRenderer:
                     else:
                         fill_color = COLOR_SOURCE_FILL if is_source else COLOR_TARGET_FILL
             
-            # Get appropriate gutter color based on fill color contrast (WCAG compliant)
             gutter_bg = get_gutter_color(fill_color)
-            
-            # Draw gutter (larger, creating border effect)
             set_cairo_color(ctx, gutter_bg)
             self._draw_rounded_rect(ctx, gutter_x, gutter_y, gutter_width, gutter_height, gutter_radius)
             ctx.fill()
 
-            # Draw fill if there's volume
             if effective_fill_width > 0 and fill_color:
                 set_cairo_color(ctx, fill_color)
-                # Draw volume bar: both ends always semi-circles
                 self._draw_rounded_rect(ctx, bar_x, bar_y, effective_fill_width, bar_height, bar_radius, right_end_flat=False)
                 ctx.fill()
             
@@ -249,10 +225,7 @@ class KnobRenderer:
         if width <= 0 or height <= 0:
             return
         
-        # Left end should ALWAYS be a semi-circle with full radius (or height/RADIUS_DIVISOR if smaller)
         left_radius = min(radius, height / RADIUS_DIVISOR)
-        
-        # Right end radius depends on width
         max_radius = min(width, height) / RADIUS_DIVISOR
         right_radius = min(radius, max_radius) if not right_end_flat else 0
         
@@ -261,36 +234,21 @@ class KnobRenderer:
             return
         
         ctx.new_sub_path()
-        
-        # Left end: ALWAYS draw as a semi-circle with left_radius
-        # Start at the leftmost point of the top-left semi-circle
         ctx.move_to(x, y + left_radius)
-        
-        # Draw top-left semi-circle: arc from left (π) to top (3π/2)
         ctx.arc(x + left_radius, y + left_radius, left_radius, math.pi, 3 * math.pi / 2)
         
-        # Top edge - go to right side
         if right_end_flat or width < (left_radius * GUTTER_MULTIPLIER):
-            # Flat right end - go straight to top-right corner
             ctx.line_to(x + width, y)
         else:
-            # Rounded right end - go to start of top-right arc
             ctx.line_to(x + width - right_radius, y)
             ctx.arc(x + width - right_radius, y + right_radius, right_radius, -math.pi / 2, 0)
         
-        # Right edge
         if right_end_flat or width < (left_radius * GUTTER_MULTIPLIER):
-            # Flat right end - straight down
             ctx.line_to(x + width, y + height)
         else:
-            # Rounded right end - continue to bottom-right arc
             ctx.arc(x + width - right_radius, y + height - right_radius, right_radius, 0, math.pi / 2)
         
-        # Bottom edge - go back to left side
         ctx.line_to(x + left_radius, y + height)
-        
-        # Left end: bottom-left semi-circle (ALWAYS drawn as semi-circle with left_radius)
-        # Draw from bottom (π/2) to left (π)
         ctx.arc(x + left_radius, y + height - left_radius, left_radius, math.pi / 2, math.pi)
         
         ctx.close_path()
@@ -310,7 +268,6 @@ class KnobRenderer:
         if meter_value <= 0 or fill_width <= 0:
             return
 
-        # Calculate meter width with margins
         available_width = fill_width - (METER_HORIZONTAL_MARGIN * GUTTER_MULTIPLIER)
         if available_width <= 0:
             return
@@ -331,13 +288,12 @@ class KnobRenderer:
         else:
             meter_color = self.action._meter_color or COLOR_METER
         
-        # Draw meter with rounded ends (no antialiasing for solid color)
-        ctx.set_antialias(cairo.ANTIALIAS_NONE)  # Disable antialiasing for crisp, solid color
+        ctx.set_antialias(cairo.ANTIALIAS_NONE)
         self._draw_rounded_rect(ctx, meter_x1, meter_y, meter_width, meter_height, meter_radius, right_end_flat=False)
         set_cairo_color(ctx, meter_color)
-        ctx.set_line_width(0)  # Ensure no border/shadow
+        ctx.set_line_width(0)
         ctx.fill()
-        ctx.set_antialias(cairo.ANTIALIAS_DEFAULT)  # Restore default antialiasing
+        ctx.set_antialias(cairo.ANTIALIAS_DEFAULT)
 
     def _composite_icon(
         self,

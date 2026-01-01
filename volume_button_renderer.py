@@ -19,23 +19,20 @@ from .render_helpers import (
 )
 from .service_monitor import is_service_available
 
-# Button symbol constants (as ratios of button size)
-# These ratios are multiplied by the button size to calculate actual dimensions
-LARGE_SYMBOL_SIZE_RATIO: Final[float] = 0.5  # 50% of button size for default large plus/minus symbol
-LARGE_SYMBOL_LINE_WIDTH_RATIO: Final[float] = 0.13  # 13% of button size for large symbol line width
-SMALL_SYMBOL_SIZE_RATIO: Final[float] = 0.12  # 12% of button size for corner plus/minus symbol (when custom icon exists)
-SMALL_SYMBOL_LINE_WIDTH_RATIO: Final[float] = 0.04  # 4% of button size for corner symbol line width
-CORNER_SYMBOL_INSET_RATIO: Final[float] = 0.08  # 8% of button size for corner symbol inset from edge
-CUSTOM_ICON_INSET_RATIO: Final[float] = 0.25  # 25% of button size for custom icon inset (leaves room for corner symbol)
-MIN_LINE_WIDTH: Final[int] = 2  # Minimum line width in pixels (ensures symbol is visible on small buttons)
-MIN_CORNER_INSET: Final[int] = 4  # Minimum corner inset in pixels (ensures symbol doesn't touch edge)
+LARGE_SYMBOL_SIZE_RATIO: Final[float] = 0.5
+LARGE_SYMBOL_LINE_WIDTH_RATIO: Final[float] = 0.13
+SMALL_SYMBOL_SIZE_RATIO: Final[float] = 0.12
+SMALL_SYMBOL_LINE_WIDTH_RATIO: Final[float] = 0.04
+CORNER_SYMBOL_INSET_RATIO: Final[float] = 0.08
+CUSTOM_ICON_INSET_RATIO: Final[float] = 0.25
+MIN_LINE_WIDTH: Final[int] = 2
+MIN_CORNER_INSET: Final[int] = 4
 
 
 class VolumeButtonRenderer:
     def __init__(self, action, is_plus: bool):
         self.action = action
-        self.is_plus = is_plus  # True for vol+, False for vol-
-        # Get button size - buttons are square, default to 72x72 for standard buttons
+        self.is_plus = is_plus
         self.button_size = get_button_size_from_action(action)
     
     def render_image(self):
