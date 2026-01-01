@@ -1,16 +1,18 @@
 """Global PipeWeaver service monitor"""
-import threading
 import socket
+import threading
 import time
-from typing import Callable, Set
+from typing import Callable, Final, Set
+
 from loguru import logger as log
 
-from .constants import (
-    PIPEWEAVER_HOST,
-    PIPEWEAVER_PORT,
-    CHECK_INTERVAL,
-    CONNECTION_TIMEOUT,
-)
+# PipeWeaver configuration
+PIPEWEAVER_HOST: Final[str] = "localhost"  # Hostname or IP address where PipeWeaver daemon is running
+PIPEWEAVER_PORT: Final[int] = 14565  # Port number where PipeWeaver daemon is listening
+
+# Service monitor configuration
+CHECK_INTERVAL: Final[float] = 5.0  # Seconds between service availability checks (how often to ping the daemon)
+CONNECTION_TIMEOUT: Final[float] = 2.0  # Seconds for socket connection timeout (how long to wait when checking if service is available)
 
 _service_available: bool = False
 _monitor_thread: threading.Thread | None = None

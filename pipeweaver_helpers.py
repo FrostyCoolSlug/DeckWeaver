@@ -1,7 +1,9 @@
 """Helper functions for working with PipeWeaver devices"""
-from typing import Any, Optional
+from typing import Any, Final, Optional
 
-from .constants import DEVICE_TYPE_SOURCE, DEVICE_TYPE_TARGET
+# Device types
+DEVICE_TYPE_SOURCE: Final[str] = "source"  # Device type identifier for input/source devices
+DEVICE_TYPE_TARGET: Final[str] = "target"  # Device type identifier for output/target devices
 
 
 DeviceInfo = dict[str, str]

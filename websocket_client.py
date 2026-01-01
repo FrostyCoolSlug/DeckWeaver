@@ -3,27 +3,39 @@ import json
 import threading
 import time
 from queue import Empty, Queue
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Final, Optional
 
 import websocket  # type: ignore
 from loguru import logger as log  # type: ignore
 
-from .constants import (
-    COMMAND_TIMEOUT,
-    INITIAL_STATUS_TIMEOUT,
-    JSON_PATCH_ADD,
-    JSON_PATCH_REMOVE,
-    JSON_PATCH_REPLACE,
-    MESSAGE_ID_PATCH,
-    PIPEWEAVER_METER_ENDPOINT,
-    PIPEWEAVER_PORT,
-    PIPEWEAVER_WS_ENDPOINT,
-    RECONNECT_DELAY,
-    WS_SOCK_TIMEOUT,
-    WS_TIMEOUT,
-    DEVICE_TYPE_SOURCE,
-    DEVICE_TYPE_TARGET,
-)
+# PipeWeaver WebSocket configuration
+PIPEWEAVER_HOST: Final[str] = "localhost"  # Hostname or IP address where PipeWeaver daemon is running
+PIPEWEAVER_PORT: Final[int] = 14565  # Port number where PipeWeaver daemon WebSocket server is listening
+PIPEWEAVER_WS_ENDPOINT: Final[str] = f"ws://{PIPEWEAVER_HOST}:{PIPEWEAVER_PORT}/api/websocket"  # WebSocket URL for main PipeWeaver API
+PIPEWEAVER_METER_ENDPOINT: Final[str] = f"ws://{PIPEWEAVER_HOST}:{PIPEWEAVER_PORT}/api/websocket/meter"  # WebSocket URL for audio level meter data
+
+# Service monitor configuration
+RECONNECT_DELAY: Final[float] = 5.0  # Seconds to wait before attempting to reconnect after connection loss
+
+# WebSocket timeouts
+WS_TIMEOUT: Final[float] = 5.0  # Seconds to wait for WebSocket connection to establish
+WS_SOCK_TIMEOUT: Final[float] = 1.0  # Seconds for socket receive timeout (how long to wait for incoming data)
+COMMAND_TIMEOUT: Final[float] = 5.0  # Seconds to wait for command response from PipeWeaver API
+INITIAL_STATUS_TIMEOUT: Final[float] = 10.0  # Seconds to wait for initial status request response (longer for first connection)
+
+# Device types
+DEVICE_TYPE_SOURCE: Final[str] = "source"  # Device type identifier for input/source devices
+DEVICE_TYPE_TARGET: Final[str] = "target"  # Device type identifier for output/target devices
+
+# JSON Patch operation types
+# Used for applying incremental updates to device state via JSON Patch protocol
+JSON_PATCH_ADD: Final[str] = "add"  # JSON Patch operation: add a new value
+JSON_PATCH_REMOVE: Final[str] = "remove"  # JSON Patch operation: remove an existing value
+JSON_PATCH_REPLACE: Final[str] = "replace"  # JSON Patch operation: replace an existing value
+
+# Special message IDs
+MESSAGE_ID_PATCH: Final[int] = 2**64 - 1  # Special message ID used to identify JSON Patch update messages (maximum 64-bit integer)
+
 from .pipeweaver_helpers import (
     DevicesTree,
     get_device_by_id,

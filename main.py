@@ -14,6 +14,8 @@ from src.backend.PluginManager.ActionInputSupport import ActionInputSupport  # t
 from src.backend.PluginManager.PluginBase import PluginBase  # type: ignore
 
 from .knob_action import PipeWeaverKnobAction
+from .volume_up_button_action import PipeWeaverVolumeUpButtonAction
+from .volume_down_button_action import PipeWeaverVolumeDownButtonAction
 from .service_monitor import start_monitor, stop_monitor
 
 
@@ -62,6 +64,7 @@ class DeckWeaver(PluginBase):
         try:
             self.load_icon_assets()
             self._register_knob_action()
+            self._register_volume_button_actions()
         except Exception as e:
             log.error(f"Error registering actions: {e}")
     
@@ -78,6 +81,33 @@ class DeckWeaver(PluginBase):
             }
         )
         self.add_action_holder(knob_holder)
+    
+    def _register_volume_button_actions(self) -> None:
+        vol_up_holder = ActionHolder(
+            plugin_base=self,
+            action_base=PipeWeaverVolumeUpButtonAction,
+            action_id_suffix="VolUp",
+            action_name=self.lm.get("actions.vol_up.name", "Volume Up"),
+            action_support={
+                Input.Key: ActionInputSupport.SUPPORTED,
+                Input.Dial: ActionInputSupport.UNSUPPORTED,
+                Input.Touchscreen: ActionInputSupport.SUPPORTED
+            }
+        )
+        self.add_action_holder(vol_up_holder)
+        
+        vol_down_holder = ActionHolder(
+            plugin_base=self,
+            action_base=PipeWeaverVolumeDownButtonAction,
+            action_id_suffix="VolDown",
+            action_name=self.lm.get("actions.vol_down.name", "Volume Down"),
+            action_support={
+                Input.Key: ActionInputSupport.SUPPORTED,
+                Input.Dial: ActionInputSupport.UNSUPPORTED,
+                Input.Touchscreen: ActionInputSupport.SUPPORTED
+            }
+        )
+        self.add_action_holder(vol_down_holder)
     
     def load_icon_assets(self) -> None:
         try:

@@ -1,55 +1,92 @@
-"""Image rendering utilities for PipeWeaver actions"""
+"""Knob-specific image rendering for PipeWeaver actions"""
 import math
-from typing import Optional
+from typing import Final, Optional
 
 import cairo  # type: ignore
 from PIL import Image  # type: ignore
 from loguru import logger as log  # type: ignore
 
-from .constants import (
-    BAR_GUTTER_SIZE,
-    BAR_HEIGHT,
-    BAR_HORIZONTAL_OFFSET,
-    BAR_RADIUS,
-    BAR_VERTICAL_OFFSET,
-    COLOR_METER,
-    COLOR_MUTED_FILL,
-    COLOR_SERVICE_UNAVAILABLE_BG,
-    COLOR_SERVICE_UNAVAILABLE_HINT,
-    COLOR_SERVICE_UNAVAILABLE_TEXT,
-    COLOR_SOURCE_FILL,
-    COLOR_TARGET_FILL,
-    CORNER_INSET,
-    DEFAULT_FONT_SIZE,
-    DEVICE_TYPE_SOURCE,
-    EDGE_PADDING,
-    GUTTER_COLOR_DARK,
-    GUTTER_COLOR_LIGHT,
-    GUTTER_LUMINANCE_THRESHOLD,
-    ICON_MAX_SIZE,
-    IMAGE_HEIGHT,
-    IMAGE_WIDTH,
-    LOADING_TEXT_COLOR,
-    LOADING_TEXT_FONT_SIZE,
-    METER_HEIGHT,
-    METER_HORIZONTAL_MARGIN,
-    RADIUS_DIVISOR,
-    RGB_MAX,
-    ALPHA_FULL_OPACITY,
-    GUTTER_MULTIPLIER,
-    SERVICE_UNAVAILABLE_HINT_FONT_SIZE,
-    SERVICE_UNAVAILABLE_HINT_Y,
-    SERVICE_UNAVAILABLE_SUBTITLE_FONT_SIZE,
-    SERVICE_UNAVAILABLE_SUBTITLE_Y,
-    SERVICE_UNAVAILABLE_TITLE_FONT_SIZE,
-    SERVICE_UNAVAILABLE_TITLE_Y,
-    VOLUME_FULL_TOLERANCE,
-    VOLUME_PERCENTAGE_MAX,
-)
 from .service_monitor import is_service_available
 
+# Image rendering constants
+# Base image dimensions - defines the canvas size for all rendered images
+IMAGE_WIDTH: Final[int] = 480  # Total width of the rendered image in pixels
+IMAGE_HEIGHT: Final[int] = 240  # Total height of the rendered image in pixels
 
-class ImageRenderer:
+# Layout spacing constants
+# General edge padding between icon and volume bar
+EDGE_PADDING: Final[int] = 20  # Horizontal spacing between icon and volume bar in pixels
+# Extra inset from corners for rounded corner elements (icon, bar positioning)
+CORNER_INSET: Final[int] = 28  # Distance from edges for corner-positioned elements in pixels
+
+# Icon layout constants
+ICON_MAX_SIZE: Final[int] = 105  # Maximum size (width/height) for the device icon in pixels
+
+# Volume bar constants
+BAR_HEIGHT: Final[int] = 32  # Height of the volume bar (not including gutter) in pixels
+BAR_RADIUS: Final[int] = 6  # Corner radius for volume bar rounded ends in pixels
+BAR_GUTTER_SIZE: Final[int] = 6  # Size of gutter border around volume bar (creates border effect) in pixels
+BAR_HORIZONTAL_OFFSET: Final[int] = 0  # Horizontal offset for bar position from calculated left margin in pixels
+BAR_VERTICAL_OFFSET: Final[int] = 10  # Vertical offset from bottom edge for bar position in pixels
+
+# Meter constants
+# Meter (audio level indicator) constants - drawn inside volume bar
+METER_HEIGHT: Final[int] = 10  # Height of the meter bar in pixels
+METER_HORIZONTAL_MARGIN: Final[int] = 10  # Horizontal margin from volume bar edges (left and right) in pixels
+
+# Service unavailable screen layout
+# Displayed when PipeWeaver daemon is not running
+SERVICE_UNAVAILABLE_TITLE_Y: Final[int] = 60  # Vertical position for "PipeWeaver" title text in pixels
+SERVICE_UNAVAILABLE_TITLE_FONT_SIZE: Final[int] = 28  # Font size for title text in points
+SERVICE_UNAVAILABLE_SUBTITLE_Y: Final[int] = 100  # Vertical position for "Service Unavailable" subtitle in pixels
+SERVICE_UNAVAILABLE_SUBTITLE_FONT_SIZE: Final[int] = 18  # Font size for subtitle text in points
+SERVICE_UNAVAILABLE_HINT_Y: Final[int] = 160  # Vertical position for hint text in pixels
+SERVICE_UNAVAILABLE_HINT_FONT_SIZE: Final[int] = 18  # Font size for hint text in points
+
+# Loading screen layout
+# Displayed when devices are being loaded
+LOADING_TEXT_FONT_SIZE: Final[int] = 24  # Font size for "Loading..." text in points
+
+# Text rendering constants
+DEFAULT_FONT_SIZE: Final[int] = 24  # Default font size for centered text rendering in points
+LOADING_TEXT_COLOR: Final[tuple[int, int, int, int]] = (255, 255, 255, 255)  # White color (RGBA) for loading text
+
+# Gutter colors (WCAG AA compliant - ensures 3:1 contrast ratio minimum)
+# Gutter color automatically switches based on volume bar fill color for visibility
+GUTTER_COLOR_DARK: Final[tuple[int, int, int, int]] = (70, 70, 70, 255)  # Dark gutter color (default) in RGBA
+GUTTER_COLOR_LIGHT: Final[tuple[int, int, int, int]] = (180, 180, 180, 255)  # Light gutter color (used when fill is dark) in RGBA
+GUTTER_LUMINANCE_THRESHOLD: Final[float] = 0.1  # Relative luminance threshold for dark color detection
+# If fill color luminance < GUTTER_LUMINANCE_THRESHOLD, use light gutter for better contrast
+
+# Volume bar rendering constants
+VOLUME_FULL_TOLERANCE: Final[float] = 0.5  # Floating point tolerance for detecting 100% volume
+# Used to determine if volume bar should have rounded right end (at 100%) or flat end (< 100%)
+VOLUME_PERCENTAGE_MAX: Final[float] = 100.0  # Maximum volume percentage (100%)
+# Used in calculations: effective_fill_width = (volume / VOLUME_PERCENTAGE_MAX) * bar_width
+
+# Color calculation constants (standard RGB/alpha values)
+RGB_MAX: Final[int] = 255  # Maximum RGB/alpha value (0-255 range)
+ALPHA_FULL_OPACITY: Final[int] = 255  # Full opacity alpha value
+# Used for color normalization and alpha channel values
+
+# Mathematical constants for radius calculations
+RADIUS_DIVISOR: Final[int] = 2  # Used to calculate radius from height/width (radius = dimension / RADIUS_DIVISOR)
+GUTTER_MULTIPLIER: Final[int] = 2  # Used to calculate gutter size (gutter extends GUTTER_MULTIPLIER * BAR_GUTTER_SIZE on each side)
+
+# Color constants
+COLOR_MUTED_FILL: Final[tuple[int, int, int, int]] = (110, 110, 110, 255)  # Gray color (RGBA) for muted volume bar fill
+COLOR_TARGET_FILL: Final[tuple[int, int, int, int]] = (102, 255, 102, 255)  # Green color (RGBA) for target device volume bar fill
+COLOR_SOURCE_FILL: Final[tuple[int, int, int, int]] = (102, 179, 255, 255)  # Blue color (RGBA) for source device volume bar fill
+COLOR_METER: Final[tuple[int, int, int, int]] = (0, 0, 0, 255)  # Black color (RGBA) for audio level meter
+COLOR_SERVICE_UNAVAILABLE_BG: Final[tuple[int, int, int, int]] = (255, 193, 7, 255)  # Amber/yellow background (RGBA) for service unavailable screen
+COLOR_SERVICE_UNAVAILABLE_TEXT: Final[tuple[int, int, int, int]] = (33, 33, 33, 255)  # Dark gray text (RGBA) for service unavailable title
+COLOR_SERVICE_UNAVAILABLE_HINT: Final[tuple[int, int, int, int]] = (66, 66, 66, 255)  # Medium gray text (RGBA) for service unavailable hint
+
+# Device types
+DEVICE_TYPE_SOURCE: Final[str] = "source"  # Device type identifier for input/source devices
+
+
+class KnobRenderer:
     def __init__(self, action):
         self.action = action
     

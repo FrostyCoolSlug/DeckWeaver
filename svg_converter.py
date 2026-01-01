@@ -1,13 +1,15 @@
 """Simple SVG to PIL converter using cairosvg"""
-import os
 import io
-from typing import Optional
+import os
+from typing import Final, Optional
 
 import cairosvg  # type: ignore
 from PIL import Image  # type: ignore
 from loguru import logger as log  # type: ignore
 
-from .constants import SVG_DEFAULT_SIZE, SVG_PADDING
+# SVG conversion settings
+SVG_DEFAULT_SIZE: Final[tuple[int, int]] = (400, 400)  # Default size (width, height) in pixels for SVG to PNG conversion
+SVG_PADDING: Final[int] = 2  # Padding in pixels to add around SVG content after cropping (prevents edge clipping)
 
 
 def svg_to_pil(svg_path: str, size: tuple[int, int] = SVG_DEFAULT_SIZE) -> Optional[Image.Image]:

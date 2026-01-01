@@ -15,21 +15,28 @@ from gi.repository import Adw, GLib, Gdk, Gtk, GdkPixbuf
 
 from src.backend.PluginManager.ActionBase import ActionBase  # type: ignore
 import globals as gl
+from typing import Final
 
-from .constants import (
-    COLOR_METER,
-    DEFAULT_VOLUME,
-    DEFAULT_VOLUME_STEP,
-    DEVICE_TYPE_SOURCE,
-    DEVICE_TYPE_TARGET,
-    MAX_VOLUME_STEP,
-    MIN_VOLUME_STEP,
-    SVG_DEFAULT_SIZE,
-    VOLUME_MAX,
-    VOLUME_MIN,
-    VOLUME_RAW_MAX,
-)
-from .image_renderer import ImageRenderer
+# Volume settings
+DEFAULT_VOLUME: Final[int] = 50  # Default volume percentage when device is first selected
+DEFAULT_VOLUME_STEP: Final[int] = 5  # Default volume step size in percentage points (how much volume changes per button press/dial turn)
+MIN_VOLUME_STEP: Final[int] = 5  # Minimum allowed volume step size in percentage points
+MAX_VOLUME_STEP: Final[int] = 20  # Maximum allowed volume step size in percentage points
+VOLUME_MIN: Final[int] = 0  # Minimum volume percentage (0%)
+VOLUME_MAX: Final[int] = 100  # Maximum volume percentage (100%)
+VOLUME_RAW_MAX: Final[int] = 255  # Maximum raw volume value from PipeWeaver API (0-255 range)
+
+# Device types
+DEVICE_TYPE_SOURCE: Final[str] = "source"  # Device type identifier for input/source devices
+DEVICE_TYPE_TARGET: Final[str] = "target"  # Device type identifier for output/target devices
+
+# SVG conversion settings
+SVG_DEFAULT_SIZE: Final[tuple[int, int]] = (400, 400)  # Default size (width, height) in pixels for SVG icon conversion
+
+# Color constants
+COLOR_METER: Final[tuple[int, int, int, int]] = (0, 0, 0, 255)  # Black color (RGBA) for audio level meter (default, can be overridden)
+from .knob_renderer import KnobRenderer
+from .volume_button_renderer import VolumeButtonRenderer
 from .pipeweaver_helpers import DeviceInfo, get_device_by_id, get_device_list, get_devices_tree
 from .service_monitor import add_state_change_callback, is_service_available, remove_state_change_callback
 from .svg_converter import is_svg_file, svg_to_pil
@@ -478,10 +485,14 @@ class PipeWeaverAction(ActionBase):
         self._last_draw_state = None
         self.update_image()
         
+        device_name = (self.selected_device_name[:25] 
+                      if self.selected_device_name else "Loading...")
         if hasattr(self, 'set_top_label'):
-            device_name = (self.selected_device_name[:25] 
-                          if self.selected_device_name else "Loading...")
             self.set_top_label(device_name, font_size=14)
+        if hasattr(self, 'set_middle_label'):
+            self.set_middle_label(device_name, font_size=14)
+        if hasattr(self, 'set_bottom_label'):
+            self.set_bottom_label(device_name, font_size=14)
     
     def _populate_device_list(self) -> None:
         handler_blocked = False
@@ -838,9 +849,13 @@ class PipeWeaverAction(ActionBase):
     def on_ready(self):
         self.on_enable()
         
+        device_name = self.selected_device_name[:25] if self.selected_device_name else "Loading..."
         if hasattr(self, 'set_top_label'):
-            device_name = self.selected_device_name[:25] if self.selected_device_name else "Loading..."
             self.set_top_label(device_name, font_size=14)
+        if hasattr(self, 'set_middle_label'):
+            self.set_middle_label(device_name, font_size=14)
+        if hasattr(self, 'set_bottom_label'):
+            self.set_bottom_label(device_name, font_size=14)
         
         self._start_meter_client()
         self._last_draw_state = None
@@ -903,9 +918,14 @@ class PipeWeaverAction(ActionBase):
                 self.volume = self._extract_volume_from_device_data(device_data)
                 old_name = self.selected_device_name
                 self._update_device_from_api(status)
-                if old_name != self.selected_device_name and hasattr(self, 'set_top_label'):
+                if old_name != self.selected_device_name:
                     device_name = self.selected_device_name[:25] if self.selected_device_name else "Loading..."
-                    self.set_top_label(device_name, font_size=14)
+                    if hasattr(self, 'set_top_label'):
+                        self.set_top_label(device_name, font_size=14)
+                    if hasattr(self, 'set_middle_label'):
+                        self.set_middle_label(device_name, font_size=14)
+                    if hasattr(self, 'set_bottom_label'):
+                        self.set_bottom_label(device_name, font_size=14)
                 self.update_image()
         except Exception as e:
             log.error(f"Error handling patch update: {e}")
@@ -942,15 +962,36 @@ class PipeWeaverAction(ActionBase):
 
         def _do_render():
             try:
+                device_name = self.selected_device_name[:25] if self.selected_device_name else "Loading..."
+                
+                # Set device name in all available labels
                 if hasattr(self, 'set_top_label'):
-                    # Hide label when service is unavailable
                     if is_service_available():
-                        device_name = self.selected_device_name[:25] if self.selected_device_name else "Loading..."
                         self.set_top_label(device_name, font_size=14)
                     else:
                         self.set_top_label("", font_size=14)
+                if hasattr(self, 'set_middle_label'):
+                    if is_service_available():
+                        self.set_middle_label(device_name, font_size=14)
+                    else:
+                        self.set_middle_label("", font_size=14)
+                if hasattr(self, 'set_bottom_label'):
+                    if is_service_available():
+                        self.set_bottom_label(device_name, font_size=14)
+                    else:
+                        self.set_bottom_label("", font_size=14)
 
-                image_renderer = ImageRenderer(self)
+                # Use appropriate renderer based on action type
+                from .volume_up_button_action import PipeWeaverVolumeUpButtonAction
+                from .volume_down_button_action import PipeWeaverVolumeDownButtonAction
+                
+                if isinstance(self, PipeWeaverVolumeUpButtonAction):
+                    image_renderer = VolumeButtonRenderer(self, is_plus=True)
+                elif isinstance(self, PipeWeaverVolumeDownButtonAction):
+                    image_renderer = VolumeButtonRenderer(self, is_plus=False)
+                else:
+                    image_renderer = KnobRenderer(self)
+                
                 image_renderer.render_image()
             except Exception as e:
                 log.error(f"Error rendering image: {e}")
