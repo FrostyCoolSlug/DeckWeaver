@@ -70,6 +70,19 @@ class PipeWeaverSliderAction(PipeWeaverAction):
         self.volume_step_row.set_value(self.get_settings().get("volume_step", DEFAULT_VOLUME_STEP))
         self.volume_step_row.connect("notify::value", self.on_volume_step_changed)
 
+        # Horizontal/Vertical orientation option
+        orientation_row = Adw.ActionRow()
+        orientation_row.set_title("Orientation")
+        orientation_row.set_subtitle("Choose slider orientation")
+        
+        self.orientation_combo = Gtk.ComboBoxText()
+        self.orientation_combo.append("vertical", "Vertical")
+        self.orientation_combo.append("horizontal", "Horizontal")
+        current_orientation = self.get_settings().get("orientation", "vertical")
+        self.orientation_combo.set_active_id(current_orientation)
+        self.orientation_combo.connect("changed", self.on_orientation_changed)
+        orientation_row.add_suffix(self.orientation_combo)
+
         meters_enabled_row = Adw.ActionRow()
         meters_enabled_row.set_title("Meters Enabled")
         meters_enabled_row.set_subtitle("Show audio level meters")
@@ -128,6 +141,7 @@ class PipeWeaverSliderAction(PipeWeaverAction):
         return [
             self.device_selector,
             self.volume_step_row,
+            orientation_row,
             meters_enabled_row,
             meter_color_row,
             volume_bar_color_row,
@@ -209,3 +223,23 @@ class PipeWeaverSliderAction(PipeWeaverAction):
         settings['volume_step'] = volume_step
         self.set_settings(settings)
         self.volume_step = volume_step
+    
+    def on_orientation_changed(self, combo: Gtk.ComboBoxText, *args: Any) -> None:
+        """Handle orientation change"""
+        orientation = combo.get_active_id()
+        settings = self.get_settings()
+        settings["orientation"] = orientation
+        self.set_settings(settings)
+        
+        # Update the orientation property immediately
+        self.orientation = orientation
+        
+        # Force complete redraw by clearing draw state and calling update_image directly
+        self._last_draw_state = None
+        
+        # Also clear any cached images to ensure fresh render
+        if hasattr(self, '_image_cache'):
+            self._image_cache.clear()
+        
+        # Force immediate update
+        self.update_image()

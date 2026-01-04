@@ -50,8 +50,10 @@ class SliderButtonRenderer:
     
     @property
     def is_top(self) -> bool:
-        """Determine if this is the top slider based on action's step sign"""
-        return self.action.volume_step > 0
+        """Determine if this is the top/left slider based on action's step sign and orientation"""
+        orientation = getattr(self.action, 'orientation', 'vertical')
+        step = getattr(self.action, 'volume_step', 5)
+        return step > 0
     
     def render_image(self):
         if not is_service_available():
@@ -298,10 +300,21 @@ class SliderButtonRenderer:
             full_image = cairo_to_pil(surface)
             full_image = full_image.resize((size, double_height), Image.Resampling.LANCZOS)
             
+            # Crop the appropriate portion
             if self.is_top:
-                return full_image.crop((0, 0, size, size))
+                result_image = full_image.crop((0, 0, size, size))
             else:
-                return full_image.crop((0, size, size, double_height))
+                result_image = full_image.crop((0, size, size, double_height))
+            
+            # Rotate for horizontal orientation
+            orientation = getattr(self.action, 'orientation', 'vertical')
+            if orientation == "horizontal":
+                result_image = result_image.rotate(90, expand=True)
+                # Resize back to square if rotation changed dimensions
+                if result_image.size != (size, size):
+                    result_image = result_image.resize((size, size), Image.Resampling.LANCZOS)
+            
+            return result_image
         except Exception as img_e:
             log.error(f"Error creating slider image: {img_e}")
             return None

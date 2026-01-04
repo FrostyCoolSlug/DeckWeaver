@@ -56,6 +56,7 @@ class PipeWeaverAction(ActionBase):
         self.selected_device_type: Optional[str] = None
         self.volume: int = DEFAULT_VOLUME
         self.volume_step: int = DEFAULT_VOLUME_STEP
+        self.orientation: str = "vertical"  # "vertical" or "horizontal"
         self._is_initializing: bool = True
         self._device_color: dict[str, Any] = {}
         self._last_draw_state: Optional[tuple[Any, ...]] = None
@@ -106,6 +107,7 @@ class PipeWeaverAction(ActionBase):
             self._load_device_settings(settings)
         
         self.volume_step = settings.get('volume_step', DEFAULT_VOLUME_STEP)
+        self.orientation = settings.get('orientation', 'vertical')
         self.icon_path_from_picker = settings.get("icon_path_from_picker")
         
         self._meter_color = self._load_color_tuple(settings, "meter_color", COLOR_METER)
@@ -879,6 +881,7 @@ class PipeWeaverAction(ActionBase):
             self._volume_bar_color,
             device_color_tuple,
             service_available,
+            self.orientation,
         )
 
         if self._last_draw_state == current_state:
