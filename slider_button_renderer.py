@@ -309,7 +309,7 @@ class SliderButtonRenderer:
             # Rotate for horizontal orientation
             orientation = getattr(self.action, 'orientation', 'vertical')
             if orientation == "horizontal":
-                result_image = result_image.rotate(90, expand=True)
+                result_image = result_image.rotate(-90, expand=True)
                 # Resize back to square if rotation changed dimensions
                 if result_image.size != (size, size):
                     result_image = result_image.resize((size, size), Image.Resampling.LANCZOS)
