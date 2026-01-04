@@ -7,48 +7,40 @@ from PIL import Image  # type: ignore
 from loguru import logger as log  # type: ignore
 
 from .render_helpers import (
-    IMAGE_WIDTH,
     RGB_MAX,
     ALPHA_FULL_OPACITY,
     create_cairo_surface,
     cairo_to_pil,
     set_cairo_color,
-    draw_text_centered,
     get_gutter_color,
     render_service_unavailable_button,
     render_loading_button,
-    get_button_size_from_action,
     set_image_on_action,
+    get_button_size_from_action,
 )
+from .pipeweaver_helpers import DEVICE_TYPE_SOURCE
 from .service_monitor import is_service_available
 
-BUTTON_SIZE: Final[int] = 72
-DOUBLE_HEIGHT: Final[int] = 144
 
+# Base pixel values for 64px button - easy to edit
+BASE_BUTTON_SIZE: Final[int] = 64
+BAR_WIDTH: Final[int] = 15
+BAR_RADIUS: Final[int] = 10
+BAR_GUTTER_SIZE: Final[int] = 3
 CORNER_INSET: Final[int] = 10
+METER_WIDTH: Final[int] = 6
+METER_VERTICAL_MARGIN: Final[int] = 2
+
+# Fixed constants
 BAR_HORIZONTAL_OFFSET: Final[int] = 0
 BAR_VERTICAL_OFFSET: Final[int] = 3
-
-BAR_WIDTH: Final[int] = 12
-BAR_RADIUS: Final[int] = 6
-
-BAR_GUTTER_SIZE: Final[int] = 3
 GUTTER_MULTIPLIER: Final[int] = 2
-
-METER_WIDTH: Final[int] = 6
-METER_VERTICAL_MARGIN: Final[int] = 4
-METER_HORIZONTAL_MARGIN: Final[int] = 3
-
 VOLUME_PERCENTAGE_MAX: Final[float] = 100.0
-
 COLOR_MUTED_FILL: Final[tuple[int, int, int, int]] = (110, 110, 110, 255)
 COLOR_TARGET_FILL: Final[tuple[int, int, int, int]] = (102, 255, 102, 255)
 COLOR_SOURCE_FILL: Final[tuple[int, int, int, int]] = (102, 179, 255, 255)
 COLOR_METER: Final[tuple[int, int, int, int]] = (0, 0, 0, 255)
-
 RADIUS_DIVISOR: Final[int] = 2
-
-DEVICE_TYPE_SOURCE: Final[str] = "source"
 
 
 class SliderButtonRenderer:
@@ -152,18 +144,19 @@ class SliderButtonRenderer:
         meter_x: float,
         meter_width: float,
         radius: float,
-        volume_color: tuple[int, int, int, int]
+        volume_color: tuple[int, int, int, int],
+        meter_vertical_margin: int
     ) -> None:
         """Draw vertical meter (audio level indicator)"""
         if meter_value <= 0 or fill_height <= 0:
             return
         
-        available_height = fill_height - (METER_VERTICAL_MARGIN * GUTTER_MULTIPLIER)
+        available_height = fill_height - (meter_vertical_margin * GUTTER_MULTIPLIER)
         if available_height <= 0:
             return
         
         base_meter_height = int((meter_value / VOLUME_PERCENTAGE_MAX) * available_height)
-        meter_y2 = start_y + fill_height - METER_VERTICAL_MARGIN
+        meter_y2 = start_y + fill_height - meter_vertical_margin
         meter_y1 = meter_y2 - base_meter_height
         
         if meter_y2 <= meter_y1 or meter_x < 0:
@@ -172,7 +165,7 @@ class SliderButtonRenderer:
         meter_height = meter_y2 - meter_y1
         meter_radius = min(meter_width / RADIUS_DIVISOR, radius)
         
-        if getattr(self.action, "_meter_invert_color", True):
+        if self.action._meter_invert_color:
             r, g, b, a = volume_color
             meter_color = (RGB_MAX - r, RGB_MAX - g, RGB_MAX - b, a)
         else:
@@ -186,26 +179,37 @@ class SliderButtonRenderer:
         ctx.set_antialias(cairo.ANTIALIAS_DEFAULT)
     
     def _get_layout_constants(self) -> dict[str, int]:
-        """Calculate all layout constants from base constants"""
+        """Calculate all layout constants from base pixel values, scaled to button size"""
         size = self.button_size
-        double_height = DOUBLE_HEIGHT
+        double_height = size * 2  # Double height is always 2x button size
         
-        slider_y = CORNER_INSET + BAR_VERTICAL_OFFSET
-        slider_height = double_height - (CORNER_INSET * 2) - BAR_VERTICAL_OFFSET
-        slider_x = (size - BAR_WIDTH) // 2 + BAR_HORIZONTAL_OFFSET
+        # Calculate scale factor based on button size vs base size
+        scale_factor = size / BASE_BUTTON_SIZE
         
-        gutter_x = slider_x - BAR_GUTTER_SIZE
-        gutter_y = slider_y - BAR_GUTTER_SIZE
-        gutter_width = BAR_WIDTH + (BAR_GUTTER_SIZE * GUTTER_MULTIPLIER)
-        gutter_height = slider_height + (BAR_GUTTER_SIZE * GUTTER_MULTIPLIER)
-        gutter_radius = (slider_height / RADIUS_DIVISOR) + BAR_GUTTER_SIZE
+        # Scale all pixel values
+        corner_inset = int(CORNER_INSET * scale_factor)
+        bar_width = int(BAR_WIDTH * scale_factor)
+        bar_radius = int(BAR_RADIUS * scale_factor)
+        bar_gutter_size = int(BAR_GUTTER_SIZE * scale_factor)
+        meter_width = int(METER_WIDTH * scale_factor)
+        meter_vertical_margin = int(METER_VERTICAL_MARGIN * scale_factor)
+        
+        slider_y = corner_inset + BAR_VERTICAL_OFFSET
+        slider_height = double_height - (corner_inset * 2) - BAR_VERTICAL_OFFSET
+        slider_x = (size - bar_width) // 2 + BAR_HORIZONTAL_OFFSET
+        
+        gutter_x = slider_x - bar_gutter_size
+        gutter_y = slider_y - bar_gutter_size
+        gutter_width = bar_width + (bar_gutter_size * GUTTER_MULTIPLIER)
+        gutter_height = slider_height + (bar_gutter_size * GUTTER_MULTIPLIER)
+        gutter_radius = (slider_height / RADIUS_DIVISOR) + bar_gutter_size
         
         return {
             'button_size': size,
             'double_height': double_height,
-            'slider_width': BAR_WIDTH,
+            'slider_width': bar_width,
             'slider_height': slider_height,
-            'slider_radius': BAR_RADIUS,
+            'slider_radius': bar_radius,
             'slider_x': slider_x,
             'slider_y': slider_y,
             'gutter_x': gutter_x,
@@ -213,6 +217,8 @@ class SliderButtonRenderer:
             'gutter_width': gutter_width,
             'gutter_height': gutter_height,
             'gutter_radius': gutter_radius,
+            'meter_width': meter_width,
+            'meter_vertical_margin': meter_vertical_margin,
         }
     
     def _render_slider(self) -> Optional[Image.Image]:
@@ -247,18 +253,15 @@ class SliderButtonRenderer:
             
             fill_color = None
             if effective_fill_height > 0:
-                is_muted = getattr(self.action, '_is_muted', False)
-                if is_muted:
+                if self.action._is_muted:
                     fill_color = COLOR_MUTED_FILL
+                elif self.action._volume_bar_color:
+                    fill_color = self.action._volume_bar_color
+                elif device_color:
+                    fill_color = (device_color.get('red', 0), device_color.get('green', 0), 
+                                  device_color.get('blue', 0), ALPHA_FULL_OPACITY)
                 else:
-                    volume_bar_color = self.action._volume_bar_color
-                    if volume_bar_color:
-                        fill_color = volume_bar_color
-                    elif device_color:
-                        fill_color = (device_color.get('red', 0), device_color.get('green', 0), 
-                                      device_color.get('blue', 0), ALPHA_FULL_OPACITY)
-                    else:
-                        fill_color = COLOR_SOURCE_FILL if is_source else COLOR_TARGET_FILL
+                    fill_color = COLOR_SOURCE_FILL if is_source else COLOR_TARGET_FILL
             
             gutter_bg = get_gutter_color(fill_color)
             set_cairo_color(ctx, gutter_bg)
@@ -273,12 +276,20 @@ class SliderButtonRenderer:
             
             meter_value = self.action._current_meter_a if is_source else self.action._current_meter_target
             if self.action._meters_enabled and meter_value > 0 and effective_fill_height > 0 and fill_color:
-                meter_x = int(slider_x + METER_HORIZONTAL_MARGIN)
-                volume_color_for_invert = fill_color
-                self._draw_vertical_meter(
-                    ctx, meter_value, int(effective_fill_height), int(slider_fill_y), 
-                    int(slider_x), int(effective_fill_height), meter_x, METER_WIDTH, int(slider_radius), volume_color_for_invert
-                )
+                # Center meter horizontally within slider
+                meter_x = int(slider_x + (slider_width - layout['meter_width']) // 2)
+                # Position meter further away from bottom with more padding
+                meter_y_offset = int(layout['meter_vertical_margin'] * 4)  # More padding from bottom
+                meter_start_y = slider_fill_y + meter_y_offset
+                meter_available_height = int(effective_fill_height) - meter_y_offset - layout['meter_vertical_margin']
+                
+                if meter_available_height > 0:
+                    volume_color_for_invert = fill_color
+                    self._draw_vertical_meter(
+                        ctx, meter_value, meter_available_height, meter_start_y, 
+                        int(slider_x), int(effective_fill_height), meter_x, layout['meter_width'], 
+                        int(slider_radius), volume_color_for_invert, layout['meter_vertical_margin']
+                    )
             
             full_image = cairo_to_pil(surface)
             full_image = full_image.resize((size, double_height), Image.Resampling.LANCZOS)

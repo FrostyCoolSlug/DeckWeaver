@@ -7,37 +7,33 @@ from PIL import Image  # type: ignore
 from loguru import logger as log  # type: ignore
 
 from .render_helpers import (
-    IMAGE_WIDTH,
-    IMAGE_HEIGHT,
     RGB_MAX,
     ALPHA_FULL_OPACITY,
-    GUTTER_COLOR_DARK,
-    GUTTER_COLOR_LIGHT,
-    GUTTER_LUMINANCE_THRESHOLD,
     create_cairo_surface,
     cairo_to_pil,
     set_cairo_color,
-    draw_text_centered,
     get_gutter_color,
     render_service_unavailable_full,
     render_loading_full,
     set_image_on_action,
+    get_screen_size_from_action,
 )
+from .pipeweaver_helpers import DEVICE_TYPE_SOURCE
 from .service_monitor import is_service_available
 
-EDGE_PADDING: Final[int] = 20
-CORNER_INSET: Final[int] = 28
+EDGE_PADDING: Final[int] = 10
+CORNER_INSET: Final[int] = 14
 
-ICON_MAX_SIZE: Final[int] = 105
+ICON_MAX_SIZE: Final[int] = 52
 
-BAR_HEIGHT: Final[int] = 32
-BAR_RADIUS: Final[int] = 6
-BAR_GUTTER_SIZE: Final[int] = 6
+BAR_HEIGHT: Final[int] = 12
+BAR_RADIUS: Final[int] = 3
+BAR_GUTTER_SIZE: Final[int] = 4
 BAR_HORIZONTAL_OFFSET: Final[int] = 0
-BAR_VERTICAL_OFFSET: Final[int] = 10
+BAR_VERTICAL_OFFSET: Final[int] = 5
 
-METER_HEIGHT: Final[int] = 10
-METER_HORIZONTAL_MARGIN: Final[int] = 10
+METER_HEIGHT: Final[int] = 4
+METER_HORIZONTAL_MARGIN: Final[int] = 5
 
 VOLUME_FULL_TOLERANCE: Final[float] = 0.5
 VOLUME_PERCENTAGE_MAX: Final[float] = 100.0
@@ -50,17 +46,16 @@ COLOR_TARGET_FILL: Final[tuple[int, int, int, int]] = (102, 255, 102, 255)
 COLOR_SOURCE_FILL: Final[tuple[int, int, int, int]] = (102, 179, 255, 255)
 COLOR_METER: Final[tuple[int, int, int, int]] = (0, 0, 0, 255)
 
-DEVICE_TYPE_SOURCE: Final[str] = "source"
-
 
 class KnobRenderer:
     def __init__(self, action):
         self.action = action
+        self.screen_width, self.screen_height = get_screen_size_from_action(action)
     
     def render_image(self):
         if not is_service_available():
             try:
-                image = render_service_unavailable_full()
+                image = render_service_unavailable_full(self.screen_width, self.screen_height)
                 if image:
                     set_image_on_action(self.action, image)
             except Exception as e:
@@ -69,7 +64,7 @@ class KnobRenderer:
         
         if getattr(self.action, '_is_loading_devices', False):
             try:
-                image = render_loading_full()
+                image = render_loading_full(self.screen_width, self.screen_height)
                 if image:
                     set_image_on_action(self.action, image)
             except Exception as e:
@@ -80,17 +75,13 @@ class KnobRenderer:
             return
         
         try:
-            is_muted = self.action._is_muted
-            if self.action.selected_device_type == DEVICE_TYPE_SOURCE:
-                image = self._render_source_device(is_muted)
-            else:
-                image = self._render_target_device(is_muted)
+            image = self._render_device(self.action._is_muted)
             
             if image:
                 set_image_on_action(self.action, image)
             else:
                 try:
-                    fallback_image = render_service_unavailable_full()
+                    fallback_image = render_service_unavailable_full(self.screen_width, self.screen_height)
                     if fallback_image:
                         set_image_on_action(self.action, fallback_image)
                 except Exception:
@@ -98,7 +89,7 @@ class KnobRenderer:
         except Exception as e:
             log.error(f"Error drawing volume bars: {e}")
             try:
-                fallback_image = render_service_unavailable_full()
+                fallback_image = render_service_unavailable_full(self.screen_width, self.screen_height)
                 if fallback_image:
                     set_image_on_action(self.action, fallback_image)
             except Exception:
@@ -107,12 +98,12 @@ class KnobRenderer:
     
     def _get_layout_constants(self) -> dict[str, int]:
         icon_left_x = CORNER_INSET
-        icon_bottom_y = IMAGE_HEIGHT - ICON_MAX_SIZE - CORNER_INSET
+        icon_bottom_y = self.screen_height - ICON_MAX_SIZE - CORNER_INSET
         
         left_margin = icon_left_x + ICON_MAX_SIZE + EDGE_PADDING
         right_margin = CORNER_INSET
-        bar_width = IMAGE_WIDTH - left_margin - right_margin
-        bar_y = IMAGE_HEIGHT - BAR_HEIGHT - CORNER_INSET - BAR_VERTICAL_OFFSET
+        bar_width = self.screen_width - left_margin - right_margin
+        bar_y = self.screen_height - BAR_HEIGHT - CORNER_INSET - BAR_VERTICAL_OFFSET
         bar_x = left_margin + BAR_HORIZONTAL_OFFSET
         gutter_x = bar_x - BAR_GUTTER_SIZE
         gutter_y = bar_y - BAR_GUTTER_SIZE
@@ -121,8 +112,8 @@ class KnobRenderer:
         gutter_radius = (BAR_HEIGHT / RADIUS_DIVISOR) + BAR_GUTTER_SIZE
         
         return {
-            'image_width': IMAGE_WIDTH,
-            'image_height': IMAGE_HEIGHT,
+            'image_width': self.screen_width,
+            'image_height': self.screen_height,
             'edge_padding': EDGE_PADDING,
             'corner_inset': CORNER_INSET,
             'icon_max_size': ICON_MAX_SIZE,
@@ -150,52 +141,37 @@ class KnobRenderer:
         try:
             layout = self._get_layout_constants()
             surface, ctx = create_cairo_surface(layout['image_width'], layout['image_height'])
-            
-            bar_x = layout['bar_x']
-            bar_y = layout['bar_y']
-            bar_width = layout['bar_width']
-            bar_height = layout['bar_height']
-            bar_radius = layout['bar_radius']
-            
-            gutter_x = layout['gutter_x']
-            gutter_y = layout['gutter_y']
-            gutter_width = layout['gutter_width']
-            gutter_height = layout['gutter_height']
-            gutter_radius = layout['gutter_radius']
 
-            effective_fill_width = (volume / VOLUME_PERCENTAGE_MAX) * bar_width
+            effective_fill_width = (volume / VOLUME_PERCENTAGE_MAX) * layout['bar_width']
             
             fill_color = None
             if effective_fill_width > 0:
                 if is_muted:
                     fill_color = COLOR_MUTED_FILL
+                elif self.action._volume_bar_color:
+                    fill_color = self.action._volume_bar_color
+                elif device_color:
+                    fill_color = (device_color.get('red', 0), device_color.get('green', 0), 
+                                  device_color.get('blue', 0), ALPHA_FULL_OPACITY)
                 else:
-                    volume_bar_color = self.action._volume_bar_color
-                    if volume_bar_color:
-                        fill_color = volume_bar_color
-                    elif device_color:
-                        fill_color = (device_color.get('red', 0), device_color.get('green', 0), 
-                                      device_color.get('blue', 0), ALPHA_FULL_OPACITY)
-                    else:
-                        fill_color = COLOR_SOURCE_FILL if is_source else COLOR_TARGET_FILL
+                    fill_color = COLOR_SOURCE_FILL if is_source else COLOR_TARGET_FILL
             
             gutter_bg = get_gutter_color(fill_color)
             set_cairo_color(ctx, gutter_bg)
-            self._draw_rounded_rect(ctx, gutter_x, gutter_y, gutter_width, gutter_height, gutter_radius)
+            self._draw_rounded_rect(ctx, layout['gutter_x'], layout['gutter_y'], layout['gutter_width'], layout['gutter_height'], layout['gutter_radius'])
             ctx.fill()
 
             if effective_fill_width > 0 and fill_color:
                 set_cairo_color(ctx, fill_color)
-                self._draw_rounded_rect(ctx, bar_x, bar_y, effective_fill_width, bar_height, bar_radius, right_end_flat=False)
+                self._draw_rounded_rect(ctx, layout['bar_x'], layout['bar_y'], effective_fill_width, layout['bar_height'], layout['bar_radius'], right_end_flat=False)
                 ctx.fill()
             
             meter_value = self.action._current_meter_a if is_source else self.action._current_meter_target
             if self.action._meters_enabled and meter_value > 0 and effective_fill_width > 0 and fill_color:
-                meter_y = bar_y + (bar_height - METER_HEIGHT) / RADIUS_DIVISOR
-                volume_color_for_invert = fill_color
+                meter_y = layout['bar_y'] + (layout['bar_height'] - METER_HEIGHT) / RADIUS_DIVISOR
                 self._draw_animated_meter(
-                    ctx, meter_value, int(effective_fill_width), int(bar_x), 
-                    int(effective_fill_width), int(meter_y), METER_HEIGHT, int(bar_radius), volume_color_for_invert
+                    ctx, meter_value, int(effective_fill_width), int(layout['bar_x']), 
+                    int(effective_fill_width), int(meter_y), METER_HEIGHT, int(layout['bar_radius']), fill_color
                 )
             
             image = cairo_to_pil(surface)
@@ -205,11 +181,6 @@ class KnobRenderer:
             log.error(f"Error creating device image: {img_e}")
             return None
     
-    def _render_source_device(self, is_muted: bool = False) -> Optional[Image.Image]:
-        return self._render_device(is_muted)
-    
-    def _render_target_device(self, muted: bool = False) -> Optional[Image.Image]:
-        return self._render_device(muted)
     
     def _draw_rounded_rect(
         self,
@@ -282,7 +253,7 @@ class KnobRenderer:
         meter_width = meter_x2 - meter_x1
         meter_radius = min(meter_height / RADIUS_DIVISOR, BAR_RADIUS)
         
-        if getattr(self.action, "_meter_invert_color", True):
+        if self.action._meter_invert_color:
             r, g, b, a = volume_color
             meter_color = (RGB_MAX - r, RGB_MAX - g, RGB_MAX - b, a)
         else:

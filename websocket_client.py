@@ -23,10 +23,6 @@ WS_SOCK_TIMEOUT: Final[float] = 1.0  # Seconds for socket receive timeout (how l
 COMMAND_TIMEOUT: Final[float] = 5.0  # Seconds to wait for command response from PipeWeaver API
 INITIAL_STATUS_TIMEOUT: Final[float] = 10.0  # Seconds to wait for initial status request response (longer for first connection)
 
-# Device types
-DEVICE_TYPE_SOURCE: Final[str] = "source"  # Device type identifier for input/source devices
-DEVICE_TYPE_TARGET: Final[str] = "target"  # Device type identifier for output/target devices
-
 # JSON Patch operation types
 # Used for applying incremental updates to device state via JSON Patch protocol
 JSON_PATCH_ADD: Final[str] = "add"  # JSON Patch operation: add a new value
@@ -37,6 +33,8 @@ JSON_PATCH_REPLACE: Final[str] = "replace"  # JSON Patch operation: replace an e
 MESSAGE_ID_PATCH: Final[int] = 2**64 - 1  # Special message ID used to identify JSON Patch update messages (maximum 64-bit integer)
 
 from .pipeweaver_helpers import (
+    DEVICE_TYPE_SOURCE,
+    DEVICE_TYPE_TARGET,
     DevicesTree,
     get_device_by_id,
     get_device_list,
@@ -309,35 +307,41 @@ class PipeWeaverWebSocketClient:
             if msg_id is None or msg_data is None:
                 return
             
+            # Handle patch messages
             if msg_id == MESSAGE_ID_PATCH or (isinstance(msg_data, dict) and "Patch" in msg_data):
                 if isinstance(msg_data, dict) and "Patch" in msg_data:
                     self._handle_patch(msg_data["Patch"])
                 return
 
+            # Handle command responses
             with self.lock:
-                if msg_id in self.message_queue:
-                    response_queue, event = self.message_queue[msg_id]
-                    if isinstance(msg_data, dict):
-                        if "Status" in msg_data:
-                            self.status = msg_data["Status"]
-                            response_queue.put(("Status", self.status))
-                        elif "Err" in msg_data:
-                            response_queue.put(("Err", msg_data["Err"]))
-                        elif "Pipewire" in msg_data:
-                            response_queue.put(("Pipewire", msg_data["Pipewire"]))
-                        else:
-                            response_queue.put(("Unknown", msg_data))
-                    elif msg_data == "Ok":
-                        response_queue.put(("Ok", None))
-                    else:
-                        response_queue.put(("Unknown", msg_data))
-
-                    event.set()
-                    del self.message_queue[msg_id]
+                if msg_id not in self.message_queue:
+                    return
+                
+                response_queue, event = self.message_queue[msg_id]
+                response = self._extract_response(msg_data)
+                response_queue.put(response)
+                event.set()
+                del self.message_queue[msg_id]
         except json.JSONDecodeError:
             pass
         except Exception as e:
             log.error(f"Error handling message: {e}")
+    
+    def _extract_response(self, msg_data: Any) -> tuple[str, Any]:
+        """Extract response tuple from message data (must be called with lock held)"""
+        if isinstance(msg_data, dict):
+            if "Status" in msg_data:
+                self.status = msg_data["Status"]
+                return ("Status", self.status)
+            if "Err" in msg_data:
+                return ("Err", msg_data["Err"])
+            if "Pipewire" in msg_data:
+                return ("Pipewire", msg_data["Pipewire"])
+            return ("Unknown", msg_data)
+        if msg_data == "Ok":
+            return ("Ok", None)
+        return ("Unknown", msg_data)
     
     def _handle_patch(self, patch: list[dict[str, Any]]) -> None:
         with self.lock:

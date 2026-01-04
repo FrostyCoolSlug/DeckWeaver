@@ -1,24 +1,21 @@
 """Slider top button action for PipeWeaver - shows upper portion of continuous slider"""
-import os
 from typing import Any
 
 import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
-gi.require_version("Gdk", "4.0")
-gi.require_version("GdkPixbuf", "2.0")
-from gi.repository import Adw, Gdk, GdkPixbuf, Gtk
+from gi.repository import Adw, Gtk
 
 from src.backend.DeckManagement.InputIdentifier import Input  # type: ignore
 
 from .action_base import (
     COLOR_METER,
     DEFAULT_VOLUME_STEP,
-    DEVICE_TYPE_SOURCE,
     MAX_VOLUME_STEP,
     MIN_VOLUME_STEP,
     PipeWeaverAction,
 )
+from .pipeweaver_helpers import DEVICE_TYPE_SOURCE
 from .service_monitor import is_service_available
 from loguru import logger as log  # type: ignore
 
@@ -64,10 +61,7 @@ class PipeWeaverSliderTopButtonAction(PipeWeaverAction):
         self.volume_step_row = Adw.SpinRow.new_with_range(MIN_VOLUME_STEP, MAX_VOLUME_STEP, 1)
         self.volume_step_row.set_title(self.plugin_base.lm.get("ui.volume_step.title"))
         self.volume_step_row.set_subtitle(self.plugin_base.lm.get("ui.volume_step.subtitle"))
-        
-        settings = self.get_settings()
-        volume_step = settings.get("volume_step", DEFAULT_VOLUME_STEP)
-        self.volume_step_row.set_value(volume_step)
+        self.volume_step_row.set_value(self.get_settings().get("volume_step", DEFAULT_VOLUME_STEP))
         self.volume_step_row.connect("notify::value", self.on_volume_step_changed)
 
         meters_enabled_row = Adw.ActionRow()
@@ -75,7 +69,7 @@ class PipeWeaverSliderTopButtonAction(PipeWeaverAction):
         meters_enabled_row.set_subtitle("Show audio level meters")
         
         self.meters_enabled_switch = Gtk.Switch(valign=Gtk.Align.CENTER)
-        self.meters_enabled_switch.set_active(getattr(self, "_meters_enabled", True))
+        self.meters_enabled_switch.set_active(self._meters_enabled)
         self.meters_enabled_switch.connect("notify::active", self.on_meters_enabled_changed)
         meters_enabled_row.add_suffix(self.meters_enabled_switch)
 
@@ -86,19 +80,13 @@ class PipeWeaverSliderTopButtonAction(PipeWeaverAction):
         meter_color_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         
         self.meter_invert_switch = Gtk.Switch(valign=Gtk.Align.CENTER)
-        self.meter_invert_switch.set_active(getattr(self, "_meter_invert_color", True))
+        self.meter_invert_switch.set_active(self._meter_invert_color)
         self.meter_invert_switch.connect("notify::active", self.on_meter_invert_changed)
         self.meter_invert_switch.set_sensitive(self._meters_enabled)
         meter_color_box.append(self.meter_invert_switch)
         
         self.meter_color_button = Gtk.ColorButton(valign=Gtk.Align.CENTER)
-        meter_color = getattr(self, "_meter_color", None) or COLOR_METER
-        rgba = Gdk.RGBA()
-        rgba.red = meter_color[0] / 255.0
-        rgba.green = meter_color[1] / 255.0
-        rgba.blue = meter_color[2] / 255.0
-        rgba.alpha = meter_color[3] / 255.0
-        self.meter_color_button.set_rgba(rgba)
+        self.meter_color_button.set_rgba(self._create_rgba_from_color(self._meter_color or COLOR_METER))
         self.meter_color_button.connect("color-set", self.on_meter_color_changed)
         self.meter_color_button.set_sensitive(self._meters_enabled and not self._meter_invert_color)
         meter_color_box.append(self.meter_color_button)
@@ -118,30 +106,8 @@ class PipeWeaverSliderTopButtonAction(PipeWeaverAction):
         volume_bar_color_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         self.volume_bar_color_button = Gtk.ColorButton(valign=Gtk.Align.CENTER)
         
-        volume_bar_color = getattr(self, "_volume_bar_color", None)
-        if not volume_bar_color:
-            device_color = getattr(self, "_device_color", {}) or {}
-            if device_color and 'red' in device_color and 'green' in device_color and 'blue' in device_color:
-                rgba = Gdk.RGBA()
-                rgba.red = device_color['red'] / 255.0
-                rgba.green = device_color['green'] / 255.0
-                rgba.blue = device_color['blue'] / 255.0
-                rgba.alpha = 1.0
-                self.volume_bar_color_button.set_rgba(rgba)
-            else:
-                rgba = Gdk.RGBA()
-                rgba.red = 1.0
-                rgba.green = 1.0
-                rgba.blue = 1.0
-                rgba.alpha = 1.0
-                self.volume_bar_color_button.set_rgba(rgba)
-        else:
-            rgba = Gdk.RGBA()
-            rgba.red = volume_bar_color[0] / 255.0
-            rgba.green = volume_bar_color[1] / 255.0
-            rgba.blue = volume_bar_color[2] / 255.0
-            rgba.alpha = volume_bar_color[3] / 255.0
-            self.volume_bar_color_button.set_rgba(rgba)
+        device_color = self._device_color or {} if not self._volume_bar_color else None
+        self.volume_bar_color_button.set_rgba(self._create_rgba_from_color(self._volume_bar_color, device_color))
         
         self.volume_bar_color_button.connect("color-set", self.on_volume_bar_color_changed)
         volume_bar_color_box.append(self.volume_bar_color_button)

@@ -26,10 +26,6 @@ VOLUME_MIN: Final[int] = 0  # Minimum volume percentage (0%)
 VOLUME_MAX: Final[int] = 100  # Maximum volume percentage (100%)
 VOLUME_RAW_MAX: Final[int] = 255  # Maximum raw volume value from PipeWeaver API (0-255 range)
 
-# Device types
-DEVICE_TYPE_SOURCE: Final[str] = "source"  # Device type identifier for input/source devices
-DEVICE_TYPE_TARGET: Final[str] = "target"  # Device type identifier for output/target devices
-
 # SVG conversion settings
 SVG_DEFAULT_SIZE: Final[tuple[int, int]] = (400, 400)  # Default size (width, height) in pixels for SVG icon conversion
 
@@ -37,7 +33,7 @@ SVG_DEFAULT_SIZE: Final[tuple[int, int]] = (400, 400)  # Default size (width, he
 COLOR_METER: Final[tuple[int, int, int, int]] = (0, 0, 0, 255)  # Black color (RGBA) for audio level meter (default, can be overridden)
 from .knob_renderer import KnobRenderer
 from .volume_button_renderer import VolumeButtonRenderer
-from .pipeweaver_helpers import DeviceInfo, get_device_by_id, get_device_list, get_devices_tree
+from .pipeweaver_helpers import DEVICE_TYPE_SOURCE, DEVICE_TYPE_TARGET, DeviceInfo, get_device_by_id, get_device_list, get_devices_tree
 from .service_monitor import add_state_change_callback, is_service_available, remove_state_change_callback
 from .svg_converter import is_svg_file, svg_to_pil
 from .websocket_client import (
@@ -74,7 +70,7 @@ class PipeWeaverAction(ActionBase):
         self._meters_enabled: bool = True
         self._meter_invert_color: bool = True
         self._is_loading_devices: bool = False
-        self.client: PipeWeaverWebSocketClient
+        self._cached_service_available: Optional[bool] = None
         
         self._load_settings()
         self._is_initializing = False
@@ -93,12 +89,16 @@ class PipeWeaverAction(ActionBase):
         if not self.selected_device_id:
             return
         try:
-            if self._is_muted:
-                self.client.unmute_device(self.selected_device_id)
-            else:
-                self.client.mute_device(self.selected_device_id)
+            (self.client.unmute_device if self._is_muted else self.client.mute_device)(self.selected_device_id)
         except Exception as e:
             log.error(f"Error toggling mute: {e}")
+    
+    def _load_color_tuple(self, settings: dict, key: str, default: Optional[tuple[int, int, int, int]] = None) -> Optional[tuple[int, int, int, int]]:
+        """Load color tuple from settings, validating format"""
+        color = settings.get(key)
+        if color and isinstance(color, (list, tuple)) and len(color) == 4:
+            return tuple(int(c) for c in color)
+        return default
     
     def _load_settings(self) -> None:
         settings = self.get_settings()
@@ -107,17 +107,8 @@ class PipeWeaverAction(ActionBase):
         self.volume_step = settings.get('volume_step', DEFAULT_VOLUME_STEP)
         self.icon_path_from_picker = settings.get("icon_path_from_picker")
         
-        meter_color = settings.get("meter_color")
-        if meter_color and isinstance(meter_color, (list, tuple)) and len(meter_color) == 4:
-            self._meter_color = tuple(int(c) for c in meter_color)
-        else:
-            self._meter_color = COLOR_METER
-        
-        volume_bar_color = settings.get("volume_bar_color")
-        if volume_bar_color and isinstance(volume_bar_color, (list, tuple)) and len(volume_bar_color) == 4:
-            self._volume_bar_color = tuple(int(c) for c in volume_bar_color)
-        else:
-            self._volume_bar_color = None
+        self._meter_color = self._load_color_tuple(settings, "meter_color", COLOR_METER)
+        self._volume_bar_color = self._load_color_tuple(settings, "volume_bar_color", None)
         
         self._meters_enabled = settings.get("meters_enabled", True)
         self._meter_invert_color = settings.get("meter_invert_color", True)
@@ -211,25 +202,24 @@ class PipeWeaverAction(ActionBase):
                     self._last_draw_state = None
                 
                 color = desc.get("colour", {})
-                old_color = self._device_color
-                self._device_color = color if isinstance(color, dict) else {}
-                
-                if old_color != self._device_color:
+                new_color = color if isinstance(color, dict) else {}
+                if self._device_color != new_color:
+                    self._device_color = new_color
                     self._last_draw_state = None
                 
-                old_muted = self._is_muted
                 if self.selected_device_type == DEVICE_TYPE_SOURCE:
                     mute_states = device_data.get("mute_states", {}).get("mute_state", [])
-                    self._is_muted = "TargetA" in mute_states
+                    new_muted = "TargetA" in mute_states
                 else:
-                    self._is_muted = device_data.get("mute_state") == "Muted"
+                    new_muted = device_data.get("mute_state") == "Muted"
                 
-                if old_muted != self._is_muted:
+                if self._is_muted != new_muted:
+                    self._is_muted = new_muted
                     self._last_draw_state = None
                 
-                old_volume = self.volume
-                self.volume = self._extract_volume_from_device_data(device_data)
-                if old_volume != self.volume:
+                new_volume = self._extract_volume_from_device_data(device_data)
+                if self.volume != new_volume:
+                    self.volume = new_volume
                     self._last_draw_state = None
             else:
                 self._device_color = {}
@@ -243,29 +233,49 @@ class PipeWeaverAction(ActionBase):
             self._last_draw_state = None
             self._update_volume_bar_color_button()
     
-    def _update_volume_bar_color_button(self) -> None:
-        """Update the volume bar color button to show device color if no override is set"""
-        if not hasattr(self, 'volume_bar_color_button'):
-            return
-        
-        if getattr(self, "_volume_bar_color", None) is not None:
-            return
-        
-        device_color = getattr(self, "_device_color", {}) or {}
-        if device_color and 'red' in device_color and 'green' in device_color and 'blue' in device_color:
-            rgba = Gdk.RGBA()
+    def _create_rgba_from_color(self, color: Optional[tuple[int, int, int, int]] = None, device_color: Optional[dict[str, Any]] = None) -> Gdk.RGBA:
+        """Create Gdk.RGBA from tuple color or device color dict"""
+        rgba = Gdk.RGBA()
+        if color:
+            rgba.red = color[0] / 255.0
+            rgba.green = color[1] / 255.0
+            rgba.blue = color[2] / 255.0
+            rgba.alpha = color[3] / 255.0
+        elif device_color and 'red' in device_color and 'green' in device_color and 'blue' in device_color:
             rgba.red = device_color['red'] / 255.0
             rgba.green = device_color['green'] / 255.0
             rgba.blue = device_color['blue'] / 255.0
             rgba.alpha = 1.0
-            self.volume_bar_color_button.set_rgba(rgba)
         else:
-            rgba = Gdk.RGBA()
             rgba.red = 1.0
             rgba.green = 1.0
             rgba.blue = 1.0
             rgba.alpha = 1.0
-            self.volume_bar_color_button.set_rgba(rgba)
+        return rgba
+    
+    def _get_device_name_display(self, max_length: int = 25) -> str:
+        """Get device name truncated for display"""
+        return (self.selected_device_name[:max_length] if self.selected_device_name else "Loading...")
+    
+    def _set_all_labels(self, text: str, font_size: int = 14, only_if_service_available: bool = False) -> None:
+        """Set text on all available labels (top, middle, bottom)"""
+        if only_if_service_available and not is_service_available():
+            text = ""
+        if hasattr(self, 'set_top_label'):
+            self.set_top_label(text, font_size=font_size)
+        if hasattr(self, 'set_middle_label'):
+            self.set_middle_label(text, font_size=font_size)
+        if hasattr(self, 'set_bottom_label'):
+            self.set_bottom_label(text, font_size=font_size)
+    
+    def _update_volume_bar_color_button(self) -> None:
+        """Update the volume bar color button to show device color if no override is set"""
+        if not hasattr(self, 'volume_bar_color_button') or self._volume_bar_color is not None:
+            return
+        
+        self.volume_bar_color_button.set_rgba(
+            self._create_rgba_from_color(device_color=self._device_color or {})
+        )
     
     def _set_selected_device(
         self, device: DeviceInfo, settings: dict[str, Any], saved_device_id: Optional[str] = None
@@ -291,9 +301,9 @@ class PipeWeaverAction(ActionBase):
         volume = int((vol_raw / VOLUME_RAW_MAX) * 100) if vol_raw > 100 else vol_raw
         volume = round(volume / self.volume_step) * self.volume_step
         if volume >= 99:
-            volume = VOLUME_MAX
-        elif volume <= 1:
-            volume = VOLUME_MIN
+            return VOLUME_MAX
+        if volume <= 1:
+            return VOLUME_MIN
         return volume
     
     def get_config_rows(self):
@@ -354,8 +364,6 @@ class PipeWeaverAction(ActionBase):
             icon_row.set_subtitle("Select an icon from StreamController's icon packs")
             self.icon_preview.set_visible(False)
         
-        self.icon_preview_container = self.icon_preview
-        
         icon_content_box.append(self.icon_preview)
         
         icon_button_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
@@ -377,10 +385,7 @@ class PipeWeaverAction(ActionBase):
         self.volume_step_row = Adw.SpinRow.new_with_range(MIN_VOLUME_STEP, MAX_VOLUME_STEP, 1)
         self.volume_step_row.set_title(self.plugin_base.lm.get("ui.volume_step.title"))
         self.volume_step_row.set_subtitle(self.plugin_base.lm.get("ui.volume_step.subtitle"))
-        
-        settings = self.get_settings()
-        volume_step = settings.get("volume_step", DEFAULT_VOLUME_STEP)
-        self.volume_step_row.set_value(volume_step)
+        self.volume_step_row.set_value(self.get_settings().get("volume_step", DEFAULT_VOLUME_STEP))
         self.volume_step_row.connect("notify::value", self.on_volume_step_changed)
 
         meters_enabled_row = Adw.ActionRow()
@@ -388,7 +393,7 @@ class PipeWeaverAction(ActionBase):
         meters_enabled_row.set_subtitle("Show audio level meters")
         
         self.meters_enabled_switch = Gtk.Switch(valign=Gtk.Align.CENTER)
-        self.meters_enabled_switch.set_active(getattr(self, "_meters_enabled", True))
+        self.meters_enabled_switch.set_active(self._meters_enabled)
         self.meters_enabled_switch.connect("notify::active", self.on_meters_enabled_changed)
         meters_enabled_row.add_suffix(self.meters_enabled_switch)
 
@@ -399,19 +404,13 @@ class PipeWeaverAction(ActionBase):
         meter_color_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         
         self.meter_invert_switch = Gtk.Switch(valign=Gtk.Align.CENTER)
-        self.meter_invert_switch.set_active(getattr(self, "_meter_invert_color", True))
+        self.meter_invert_switch.set_active(self._meter_invert_color)
         self.meter_invert_switch.connect("notify::active", self.on_meter_invert_changed)
         self.meter_invert_switch.set_sensitive(self._meters_enabled)
         meter_color_box.append(self.meter_invert_switch)
         
         self.meter_color_button = Gtk.ColorButton(valign=Gtk.Align.CENTER)
-        meter_color = getattr(self, "_meter_color", None) or COLOR_METER
-        rgba = Gdk.RGBA()
-        rgba.red = meter_color[0] / 255.0
-        rgba.green = meter_color[1] / 255.0
-        rgba.blue = meter_color[2] / 255.0
-        rgba.alpha = meter_color[3] / 255.0
-        self.meter_color_button.set_rgba(rgba)
+        self.meter_color_button.set_rgba(self._create_rgba_from_color(self._meter_color or COLOR_METER))
         self.meter_color_button.connect("color-set", self.on_meter_color_changed)
         self.meter_color_button.set_sensitive(self._meters_enabled and not self._meter_invert_color)
         meter_color_box.append(self.meter_color_button)
@@ -431,30 +430,8 @@ class PipeWeaverAction(ActionBase):
         volume_bar_color_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         self.volume_bar_color_button = Gtk.ColorButton(valign=Gtk.Align.CENTER)
         
-        volume_bar_color = getattr(self, "_volume_bar_color", None)
-        if not volume_bar_color:
-            device_color = getattr(self, "_device_color", {}) or {}
-            if device_color and 'red' in device_color and 'green' in device_color and 'blue' in device_color:
-                rgba = Gdk.RGBA()
-                rgba.red = device_color['red'] / 255.0
-                rgba.green = device_color['green'] / 255.0
-                rgba.blue = device_color['blue'] / 255.0
-                rgba.alpha = 1.0
-                self.volume_bar_color_button.set_rgba(rgba)
-            else:
-                rgba = Gdk.RGBA()
-                rgba.red = 1.0
-                rgba.green = 1.0
-                rgba.blue = 1.0
-                rgba.alpha = 1.0
-                self.volume_bar_color_button.set_rgba(rgba)
-        else:
-            rgba = Gdk.RGBA()
-            rgba.red = volume_bar_color[0] / 255.0
-            rgba.green = volume_bar_color[1] / 255.0
-            rgba.blue = volume_bar_color[2] / 255.0
-            rgba.alpha = volume_bar_color[3] / 255.0
-            self.volume_bar_color_button.set_rgba(rgba)
+        device_color = self._device_color or {} if not self._volume_bar_color else None
+        self.volume_bar_color_button.set_rgba(self._create_rgba_from_color(self._volume_bar_color, device_color))
         
         self.volume_bar_color_button.connect("color-set", self.on_volume_bar_color_changed)
         volume_bar_color_box.append(self.volume_bar_color_button)
@@ -485,14 +462,7 @@ class PipeWeaverAction(ActionBase):
         self._last_draw_state = None
         self.update_image()
         
-        device_name = (self.selected_device_name[:25] 
-                      if self.selected_device_name else "Loading...")
-        if hasattr(self, 'set_top_label'):
-            self.set_top_label(device_name, font_size=14)
-        if hasattr(self, 'set_middle_label'):
-            self.set_middle_label(device_name, font_size=14)
-        if hasattr(self, 'set_bottom_label'):
-            self.set_bottom_label(device_name, font_size=14)
+        self._set_all_labels(self._get_device_name_display())
     
     def _populate_device_list(self) -> None:
         handler_blocked = False
@@ -610,12 +580,7 @@ class PipeWeaverAction(ActionBase):
         self._last_draw_state = None
         self.update_image()
         if hasattr(self, 'meter_color_button'):
-            rgba = Gdk.RGBA()
-            rgba.red = COLOR_METER[0] / 255.0
-            rgba.green = COLOR_METER[1] / 255.0
-            rgba.blue = COLOR_METER[2] / 255.0
-            rgba.alpha = COLOR_METER[3] / 255.0
-            self.meter_color_button.set_rgba(rgba)
+            self.meter_color_button.set_rgba(self._create_rgba_from_color(COLOR_METER))
     
     def on_volume_bar_color_changed(self, button: Gtk.ColorButton) -> None:
         rgba = button.get_rgba()
@@ -639,21 +604,9 @@ class PipeWeaverAction(ActionBase):
         self._last_draw_state = None
         self.update_image()
         if hasattr(self, 'volume_bar_color_button'):
-            device_color = getattr(self, "_device_color", {}) or {}
-            if device_color and 'red' in device_color and 'green' in device_color and 'blue' in device_color:
-                rgba = Gdk.RGBA()
-                rgba.red = device_color['red'] / 255.0
-                rgba.green = device_color['green'] / 255.0
-                rgba.blue = device_color['blue'] / 255.0
-                rgba.alpha = 1.0
-                self.volume_bar_color_button.set_rgba(rgba)
-            else:
-                rgba = Gdk.RGBA()
-                rgba.red = 1.0
-                rgba.green = 1.0
-                rgba.blue = 1.0
-                rgba.alpha = 1.0
-                self.volume_bar_color_button.set_rgba(rgba)
+            self.volume_bar_color_button.set_rgba(
+                self._create_rgba_from_color(device_color=self._device_color or {})
+            )
 
     def on_remove_icon_clicked(self, button: Gtk.Button, *args: Any) -> None:
         settings = self.get_settings()
@@ -688,49 +641,26 @@ class PipeWeaverAction(ActionBase):
         if not icon_path:
             return
         
-        try:
-            normalized_new_path = os.path.abspath(os.path.normpath(icon_path))
-        except Exception:
-            normalized_new_path = icon_path
-        
         old_icon_path = self.icon_path_from_picker
-        if old_icon_path:
-            try:
-                normalized_old_path = os.path.abspath(os.path.normpath(old_icon_path))
-            except Exception:
-                normalized_old_path = old_icon_path
-        else:
-            normalized_old_path = None
-        
-        icon_changed = normalized_old_path != normalized_new_path
+        icon_changed = old_icon_path != icon_path
         
         settings = self.get_settings()
         settings["icon_path_from_picker"] = icon_path
         self.set_settings(settings)
-        
         self.icon_path_from_picker = icon_path
         
-        if old_icon_path and icon_changed and old_icon_path in self._icon_cache:
-            del self._icon_cache[old_icon_path]
-        
-        if icon_changed and icon_path and os.path.exists(icon_path):
-            try:
-                self._get_icon()
-            except Exception:
-                pass
+        if old_icon_path and icon_changed:
+            self._icon_cache.pop(old_icon_path, None)
         
         if hasattr(self, 'icon_preview') and os.path.exists(icon_path):
             try:
                 pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(
-                    icon_path,
-                    width=20,
-                    height=20,
-                    preserve_aspect_ratio=True
+                    icon_path, width=20, height=20, preserve_aspect_ratio=True
                 )
                 self.icon_preview.set_from_pixbuf(pixbuf)
                 self.icon_preview.set_visible(True)
-                icon_name = os.path.splitext(os.path.basename(icon_path))[0]
                 if hasattr(self, 'icon_row'):
+                    icon_name = os.path.splitext(os.path.basename(icon_path))[0]
                     self.icon_row.set_subtitle(f"Selected: {icon_name}")
             except Exception:
                 pass
@@ -738,35 +668,28 @@ class PipeWeaverAction(ActionBase):
         if icon_changed:
             self._last_draw_state = None
             self.update_image()
-        else:
-            if hasattr(self, '_last_draw_state') and self._last_draw_state is not None:
-                state_list = list(self._last_draw_state)
-                state_list[6] = normalized_new_path
-                self._last_draw_state = tuple(state_list)
     
     def _get_icon(self) -> Optional[Image.Image]:
         if not self.icon_path_from_picker or not os.path.exists(self.icon_path_from_picker):
             return None
         
+        if self.icon_path_from_picker in self._icon_cache:
+            return self._icon_cache[self.icon_path_from_picker]
+        
         try:
-            cache_key = self.icon_path_from_picker
-            if cache_key in self._icon_cache:
-                return self._icon_cache[cache_key]
-            
             if is_svg_file(self.icon_path_from_picker):
                 image = svg_to_pil(self.icon_path_from_picker, SVG_DEFAULT_SIZE)
             else:
                 image = Image.open(self.icon_path_from_picker)
-                width, height = image.size
-                max_dimension = max(width, height)
-                
+                max_dimension = max(image.size)
                 if max_dimension < 200:
-                    upscale_factor = 400 / max_dimension
-                    new_width = int(width * upscale_factor)
-                    new_height = int(height * upscale_factor)
-                    image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                    scale = 400 / max_dimension
+                    image = image.resize(
+                        (int(image.width * scale), int(image.height * scale)),
+                        Image.Resampling.LANCZOS
+                    )
             
-            self._icon_cache[cache_key] = image
+            self._icon_cache[self.icon_path_from_picker] = image
             return image
         except Exception as e:
             log.error(f"Error loading picker icon: {e}")
@@ -849,13 +772,7 @@ class PipeWeaverAction(ActionBase):
     def on_ready(self):
         self.on_enable()
         
-        device_name = self.selected_device_name[:25] if self.selected_device_name else "Loading..."
-        if hasattr(self, 'set_top_label'):
-            self.set_top_label(device_name, font_size=14)
-        if hasattr(self, 'set_middle_label'):
-            self.set_middle_label(device_name, font_size=14)
-        if hasattr(self, 'set_bottom_label'):
-            self.set_bottom_label(device_name, font_size=14)
+        self._set_all_labels(self._get_device_name_display())
         
         self._start_meter_client()
         self._last_draw_state = None
@@ -871,6 +788,8 @@ class PipeWeaverAction(ActionBase):
         self._stop_meter_client()
     
     def _on_service_state_change(self, available: bool) -> None:
+        # Update cached service availability
+        self._cached_service_available = available
         if available:
             self._load_devices_async()
         else:
@@ -878,21 +797,26 @@ class PipeWeaverAction(ActionBase):
             self.update_image()
     
     def _meter_callback(self, node_id: str, percent: int) -> None:
-        if not getattr(self, "_meters_enabled", True):
+        if not self._meters_enabled:
             return
         
         if node_id != self.selected_device_id:
             return
 
+        # Only update if meter value actually changed
         if self.selected_device_type == DEVICE_TYPE_SOURCE:
+            if self._current_meter_a == percent:
+                return
             self._current_meter_a = percent
         elif self.selected_device_type == DEVICE_TYPE_TARGET:
+            if self._current_meter_target == percent:
+                return
             self._current_meter_target = percent
 
         self.update_image()
     
     def _start_meter_client(self):
-        if not getattr(self, "_meters_enabled", True):
+        if not self._meters_enabled:
             return
         try:
             if self._meter_client is None:
@@ -919,13 +843,7 @@ class PipeWeaverAction(ActionBase):
                 old_name = self.selected_device_name
                 self._update_device_from_api(status)
                 if old_name != self.selected_device_name:
-                    device_name = self.selected_device_name[:25] if self.selected_device_name else "Loading..."
-                    if hasattr(self, 'set_top_label'):
-                        self.set_top_label(device_name, font_size=14)
-                    if hasattr(self, 'set_middle_label'):
-                        self.set_middle_label(device_name, font_size=14)
-                    if hasattr(self, 'set_bottom_label'):
-                        self.set_bottom_label(device_name, font_size=14)
+                    self._set_all_labels(self._get_device_name_display())
                 self.update_image()
         except Exception as e:
             log.error(f"Error handling patch update: {e}")
@@ -938,7 +856,14 @@ class PipeWeaverAction(ActionBase):
             except Exception:
                 pass
 
-        device_color_tuple = tuple(sorted(self._device_color.items())) if self._device_color else tuple()
+        device_color_tuple = tuple(sorted(self._device_color.items())) if self._device_color else ()
+        
+        # Cache service availability to avoid calling it on every update
+        # Only refresh if we don't have a cached value or if it might have changed
+        service_available = getattr(self, '_cached_service_available', None)
+        if service_available is None:
+            service_available = is_service_available()
+            self._cached_service_available = service_available
         
         current_state = (
             self.selected_device_id,
@@ -952,7 +877,7 @@ class PipeWeaverAction(ActionBase):
             self._meter_color,
             self._volume_bar_color,
             device_color_tuple,
-            is_service_available(),
+            service_available,
         )
 
         if self._last_draw_state == current_state:
@@ -962,24 +887,7 @@ class PipeWeaverAction(ActionBase):
 
         def _do_render():
             try:
-                device_name = self.selected_device_name[:25] if self.selected_device_name else "Loading..."
-                
-                # Set device name in all available labels
-                if hasattr(self, 'set_top_label'):
-                    if is_service_available():
-                        self.set_top_label(device_name, font_size=14)
-                    else:
-                        self.set_top_label("", font_size=14)
-                if hasattr(self, 'set_middle_label'):
-                    if is_service_available():
-                        self.set_middle_label(device_name, font_size=14)
-                    else:
-                        self.set_middle_label("", font_size=14)
-                if hasattr(self, 'set_bottom_label'):
-                    if is_service_available():
-                        self.set_bottom_label(device_name, font_size=14)
-                    else:
-                        self.set_bottom_label("", font_size=14)
+                self._set_all_labels(self._get_device_name_display(), only_if_service_available=True)
 
                 # Use appropriate renderer based on action type
                 from .volume_up_button_action import PipeWeaverVolumeUpButtonAction

@@ -7,15 +7,13 @@ from PIL import Image  # type: ignore
 from loguru import logger as log  # type: ignore
 
 from .render_helpers import (
-    IMAGE_WIDTH,
     create_cairo_surface,
     cairo_to_pil,
     set_cairo_color,
-    draw_text_centered,
     render_service_unavailable_button,
     render_loading_button,
-    get_button_size_from_action,
     set_image_on_action,
+    get_button_size_from_action,
 )
 from .service_monitor import is_service_available
 

@@ -24,14 +24,11 @@ from .service_monitor import start_monitor, stop_monitor
 class DeckWeaver(PluginBase):
     def __init__(self):
         super().__init__()
-        self.init_vars()
+        self.lm = self.locale_manager
         self.load_and_apply_settings()
         self.load_devices()
         self.register_plugin()
         start_monitor()
-    
-    def init_vars(self) -> None:
-        self.lm = self.locale_manager
     
     def load_and_apply_settings(self) -> None:
         settings = self.get_settings()
@@ -43,16 +40,18 @@ class DeckWeaver(PluginBase):
             self.lm.set_to_os_default()
     
     def _set_language(self, language: str) -> None:
-        try:
-            self.lm.set_language(language)
-        except AttributeError:
-            try:
-                self.lm.set_locale(language)
-            except AttributeError:
-                if hasattr(self.lm, 'language'):
-                    self.lm.language = language
-                else:
-                    self.lm.set_to_os_default()
+        """Set language, falling back to OS default if method not available"""
+        for method_name in ['set_language', 'set_locale']:
+            if hasattr(self.lm, method_name):
+                try:
+                    getattr(self.lm, method_name)(language)
+                    return
+                except (AttributeError, TypeError):
+                    continue
+        if hasattr(self.lm, 'language'):
+            self.lm.language = language
+        else:
+            self.lm.set_to_os_default()
     
     def register_plugin(self) -> None:
         self.register(
@@ -159,26 +158,26 @@ class DeckWeaver(PluginBase):
         except Exception as e:
             log.warning(f"Could not load icon assets: {e}")
     
-    def get_settings_area(self) -> Adw.PreferencesGroup:
-        languages = [
+    def _get_languages(self) -> list[tuple[str, str]]:
+        """Get list of available languages as (code, name) tuples"""
+        return [
             ("auto", self.lm.get("settings.language.name.auto")),
             ("en_US", self.lm.get("settings.language.name.en_US")),
             ("es_ES", self.lm.get("settings.language.name.es_ES")),
             ("fr_FR", self.lm.get("settings.language.name.fr_FR")),
             ("de_DE", self.lm.get("settings.language.name.de_DE")),
         ]
-
-        language_names = [name for _, name in languages]
-        self.language_model = Gtk.StringList().new(language_names)
+    
+    def get_settings_area(self) -> Adw.PreferencesGroup:
+        languages = self._get_languages()
+        self.language_model = Gtk.StringList.new([name for _, name in languages])
         self.language_dropdown = Adw.ComboRow(
             model=self.language_model,
             title=self.lm.get("settings.language.label")
         )
         
-        settings = self.get_settings()
-        current_language = settings.get("language", "auto")
-        
-        for i, (code, name) in enumerate(languages):
+        current_language = self.get_settings().get("language", "auto")
+        for i, (code, _) in enumerate(languages):
             if code == current_language:
                 self.language_dropdown.set_selected(i)
                 break
@@ -191,15 +190,8 @@ class DeckWeaver(PluginBase):
     
     def on_language_changed(self, combo: Adw.ComboRow, data: Any) -> None:
         selected_index = combo.get_selected()
+        languages = self._get_languages()
         
-        languages = [
-            ("auto", self.lm.get("settings.language.name.auto")),
-            ("en_US", self.lm.get("settings.language.name.en_US")),
-            ("es_ES", self.lm.get("settings.language.name.es_ES")),
-            ("fr_FR", self.lm.get("settings.language.name.fr_FR")),
-            ("de_DE", self.lm.get("settings.language.name.de_DE")),
-        ]
-
         if selected_index < len(languages):
             selected_code, _ = languages[selected_index]
             settings = self.get_settings()
