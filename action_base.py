@@ -104,6 +104,7 @@ class PipeWeaverAction(ActionBase):
         settings = self.get_settings()
         if self.devices:
             self._load_device_settings(settings)
+        
         self.volume_step = settings.get('volume_step', DEFAULT_VOLUME_STEP)
         self.icon_path_from_picker = settings.get("icon_path_from_picker")
         
@@ -892,18 +893,16 @@ class PipeWeaverAction(ActionBase):
                 # Use appropriate renderer based on action type
                 from .volume_up_button_action import PipeWeaverVolumeUpButtonAction
                 from .volume_down_button_action import PipeWeaverVolumeDownButtonAction
-                from .slider_top_button_action import PipeWeaverSliderTopButtonAction
-                from .slider_bottom_button_action import PipeWeaverSliderBottomButtonAction
+                from .slider_action import PipeWeaverSliderAction
                 from .slider_button_renderer import SliderButtonRenderer
+                from .volume_button_renderer import VolumeButtonRenderer
                 
                 if isinstance(self, PipeWeaverVolumeUpButtonAction):
                     image_renderer = VolumeButtonRenderer(self, is_plus=True)
                 elif isinstance(self, PipeWeaverVolumeDownButtonAction):
                     image_renderer = VolumeButtonRenderer(self, is_plus=False)
-                elif isinstance(self, PipeWeaverSliderTopButtonAction):
-                    image_renderer = SliderButtonRenderer(self, is_top=True)
-                elif isinstance(self, PipeWeaverSliderBottomButtonAction):
-                    image_renderer = SliderButtonRenderer(self, is_top=False)
+                elif isinstance(self, PipeWeaverSliderAction):
+                    image_renderer = SliderButtonRenderer(self)
                 else:
                     image_renderer = KnobRenderer(self)
                 

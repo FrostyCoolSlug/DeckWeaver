@@ -44,10 +44,14 @@ RADIUS_DIVISOR: Final[int] = 2
 
 
 class SliderButtonRenderer:
-    def __init__(self, action, is_top: bool):
+    def __init__(self, action):
         self.action = action
-        self.is_top = is_top
         self.button_size = get_button_size_from_action(action)
+    
+    @property
+    def is_top(self) -> bool:
+        """Determine if this is the top slider based on action's step sign"""
+        return self.action.volume_step > 0
     
     def render_image(self):
         if not is_service_available():

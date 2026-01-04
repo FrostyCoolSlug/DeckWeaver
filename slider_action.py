@@ -1,4 +1,4 @@
-"""Slider bottom button action for PipeWeaver - shows lower portion of continuous slider"""
+"""Unified slider button action for PipeWeaver - shows top/bottom portion based on step sign"""
 from typing import Any
 
 import gi
@@ -20,14 +20,20 @@ from .service_monitor import is_service_available
 from loguru import logger as log  # type: ignore
 
 
-class PipeWeaverSliderBottomButtonAction(PipeWeaverAction):
+class PipeWeaverSliderAction(PipeWeaverAction):
+    @property
+    def is_top_slider(self) -> bool:
+        """Determine if this is the top slider based on step sign"""
+        return self.volume_step > 0
+    
     def event_callback(self, event: Any, data: Any) -> None:
         # Handle button press events - SHORT_UP is the event for button press/release
         if event == Input.Key.Events.SHORT_UP or str(event) == "Key Short Up" or "Short Up" in str(event):
             if not self.selected_device_id:
-                log.warning("Volume down button pressed but no device selected")
+                direction = "up" if self.is_top_slider else "down"
+                log.warning(f"Volume {direction} button pressed but no device selected")
                 return
-            self._set_volume_relative(-self.volume_step)
+            self._set_volume_relative(self.volume_step)
     
     def get_config_rows(self):
         """Config - device (source only), volume step"""
@@ -58,9 +64,9 @@ class PipeWeaverSliderBottomButtonAction(PipeWeaverAction):
         refresh_button.connect("clicked", self.on_refresh_clicked)
         self.device_selector.add_suffix(refresh_button)
         
-        self.volume_step_row = Adw.SpinRow.new_with_range(MIN_VOLUME_STEP, MAX_VOLUME_STEP, 1)
+        self.volume_step_row = Adw.SpinRow.new_with_range(-MAX_VOLUME_STEP, MAX_VOLUME_STEP, 1)
         self.volume_step_row.set_title(self.plugin_base.lm.get("ui.volume_step.title"))
-        self.volume_step_row.set_subtitle(self.plugin_base.lm.get("ui.volume_step.subtitle"))
+        self.volume_step_row.set_subtitle("Positive step = top slider, Negative step = bottom slider")
         self.volume_step_row.set_value(self.get_settings().get("volume_step", DEFAULT_VOLUME_STEP))
         self.volume_step_row.connect("notify::value", self.on_volume_step_changed)
 
