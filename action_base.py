@@ -65,7 +65,6 @@ class PipeWeaverAction(ActionBase):
         self._current_meter_a: int = 0
         self._current_meter_target: int = 0
         self._meter_client: Optional[MeterWebSocketClient] = None
-        self._is_muted: bool = False
         self._meter_color: Optional[tuple[int, int, int, int]] = None
         self._volume_bar_color: Optional[tuple[int, int, int, int]] = None
         self._meters_enabled: bool = True
@@ -90,9 +89,19 @@ class PipeWeaverAction(ActionBase):
         if not self.selected_device_id:
             return
         try:
-            (self.client.unmute_device if self._is_muted else self.client.mute_device)(self.selected_device_id)
+            # Determine current mute state from device data
+            device_data = self._get_device_by_id(self.selected_device_id, self.selected_device_type)
+            if device_data:
+                if self.selected_device_type == DEVICE_TYPE_SOURCE:
+                    mute_states = device_data.get("mute_states", {}).get("mute_state", [])
+                    is_muted = "TargetA" in mute_states
+                else:
+                    is_muted = device_data.get("mute_state") == "Muted"
+                
+                (self.client.unmute_device if is_muted else self.client.mute_device)(self.selected_device_id)
         except Exception as e:
             log.error(f"Error toggling mute: {e}")
+    
     
     def _load_color_tuple(self, settings: dict, key: str, default: Optional[tuple[int, int, int, int]] = None) -> Optional[tuple[int, int, int, int]]:
         """Load color tuple from settings, validating format"""
@@ -189,7 +198,6 @@ class PipeWeaverAction(ActionBase):
                 status_data = self.client._get_status()
             if not status_data:
                 self._device_color = {}
-                self._is_muted = False
                 self._last_draw_state = None
                 self._update_volume_bar_color_button()
                 return
@@ -210,15 +218,6 @@ class PipeWeaverAction(ActionBase):
                     self._device_color = new_color
                     self._last_draw_state = None
                 
-                if self.selected_device_type == DEVICE_TYPE_SOURCE:
-                    mute_states = device_data.get("mute_states", {}).get("mute_state", [])
-                    new_muted = "TargetA" in mute_states
-                else:
-                    new_muted = device_data.get("mute_state") == "Muted"
-                
-                if self._is_muted != new_muted:
-                    self._is_muted = new_muted
-                    self._last_draw_state = None
                 
                 new_volume = self._extract_volume_from_device_data(device_data)
                 if self.volume != new_volume:
@@ -226,13 +225,11 @@ class PipeWeaverAction(ActionBase):
                     self._last_draw_state = None
             else:
                 self._device_color = {}
-                self._is_muted = False
                 self._last_draw_state = None
             
             self._update_volume_bar_color_button()
         except Exception:
             self._device_color = {}
-            self._is_muted = False
             self._last_draw_state = None
             self._update_volume_bar_color_button()
     
@@ -321,13 +318,27 @@ class PipeWeaverAction(ActionBase):
         
         self._load_settings()
         
-        self.device_model = Gtk.StringList()
-        self.device_selector = Adw.ComboRow(
-            model=self.device_model, 
-            title=self.plugin_base.lm.get("ui.device.title")
-        )
+        # Create an ExpanderRow for the device selector
+        self.device_expander = Adw.ExpanderRow()
+        self.device_expander.set_title(self.plugin_base.lm.get("ui.device.title"))
+        # Set initial subtitle to current device or placeholder
+        initial_subtitle = self.selected_device_name if self.selected_device_name else "No device selected"
+        self.device_expander.set_subtitle(initial_subtitle)
         
-        self.device_selector.connect("notify::selected-item", self.on_device_changed)
+        # Create a container for device groups inside the expander
+        self.device_container = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        self.device_container.set_margin_start(18)
+        self.device_container.set_margin_end(18)
+        self.device_container.set_margin_bottom(12)
+        
+        # Wrap in a ScrolledWindow for better UX with many devices
+        scrolled = Gtk.ScrolledWindow()
+        scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scrolled.set_min_content_height(300)
+        scrolled.set_child(self.device_container)
+        
+        self.device_expander.add_row(scrolled)
+        self.device_selector = self.device_expander  # Keep reference for compatibility
         self._populate_device_list()
         
         refresh_button = Gtk.Button(
@@ -336,7 +347,7 @@ class PipeWeaverAction(ActionBase):
             tooltip_text=self.plugin_base.lm.get("ui.refresh_devices.button")
         )
         refresh_button.connect("clicked", self.on_refresh_clicked)
-        self.device_selector.add_suffix(refresh_button)
+        self.device_expander.add_suffix(refresh_button)
         
         icon_row = Adw.ActionRow()
         icon_row.set_title(self.plugin_base.lm.get("ui.custom_icon.title"))
@@ -447,7 +458,7 @@ class PipeWeaverAction(ActionBase):
         volume_bar_color_row.add_suffix(volume_bar_color_box)
         
         return [
-            self.device_selector,
+            self.device_expander,
             icon_row,
             self.volume_step_row,
             meters_enabled_row,
@@ -462,60 +473,123 @@ class PipeWeaverAction(ActionBase):
         self._reset_meter_values()
         self._update_device_from_api()
         
+        # Update expander subtitle to show selected device
+        if hasattr(self, 'device_expander'):
+            self.device_expander.set_subtitle(device['name'])
+        
         self._last_draw_state = None
         self.update_image()
         
         self._set_all_labels(self._get_device_name_display())
     
-    def _populate_device_list(self) -> None:
-        handler_blocked = False
-        if hasattr(self, 'device_selector'):
-            try:
-                self.device_selector.handler_block_by_func(self.on_device_changed)
-                handler_blocked = True
-            except (AttributeError, TypeError):
-                pass
+    def _create_device_row(self, device: DeviceInfo) -> Adw.ActionRow:
+        """Create a styled device row"""
+        row = Adw.ActionRow()
+        row.set_title(device['name'])
         
-        if hasattr(self, 'device_model'):
-            while self.device_model.get_n_items() > 0:
-                self.device_model.remove(0)
+        # Add subtitle with full device information
+        device_type = "Source" if device['type'] == DEVICE_TYPE_SOURCE else "Target"
+        hw_type = "Physical" if device.get('is_physical', False) else "Virtual"
+        subtitle = f"{hw_type} {device_type}"
+        row.set_subtitle(subtitle)
         
-        self.devices = self._load_devices()
+        # Add device color indicator if available
+        device_data = self._get_device_by_id(device['id'], device['type'])
+        if device_data:
+            color = device_data.get("description", {}).get("colour", {})
+            if color and isinstance(color, dict) and 'red' in color:
+                # Create a small color indicator
+                color_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+                
+                # Color dot using CSS
+                color_dot = Gtk.Label()
+                color_dot.set_label("●")
+                # Convert RGB to hex color for CSS
+                hex_color = f"#{color.get('red', 0):02x}{color.get('green', 0):02x}{color.get('blue', 0):02x}"
+                color_dot.set_markup(f"<span foreground='{hex_color}'>●</span>")
+                color_box.append(color_dot)
+                
+                row.add_suffix(color_box)
         
-        for device in self.devices:
-            self.device_model.append(device['name'])
+        row.device_data = device
         
-        if self.selected_device_id:
-            for i, device in enumerate(self.devices):
-                if device['id'] == self.selected_device_id:
-                    self.device_selector.set_selected(i)
-                    if handler_blocked:
-                        self.device_selector.handler_unblock_by_func(self.on_device_changed)
-                    return
+        row.set_activatable(True)
+        row.connect("activated", self._on_device_row_activated)
         
-        if self.devices:
-            self.device_selector.set_selected(0)
-            if not self.selected_device_id:
-                settings = self.get_settings()
-                device = self.devices[0]
-                settings["device_id"] = device['id']
-                settings.pop("device_name", None)
-                if not self._is_initializing:
-                    self.set_settings(settings)
-                    self._update_device_selection(device)
-        
-        if handler_blocked:
-            self.device_selector.handler_unblock_by_func(self.on_device_changed)
+        return row
     
-    def on_device_changed(self, combo_row: Adw.ComboRow, *args: Any) -> None:
-        selected_index = combo_row.get_selected()
-        if selected_index is not None and selected_index < len(self.devices):
-            device = self.devices[selected_index]
+    def _on_device_row_activated(self, row: Adw.ActionRow) -> None:
+        """Handle device row activation"""
+        device = row.device_data
+        if device:
             settings = self.get_settings()
             settings["device_id"] = device['id']
             settings.pop("device_name", None)
             self.set_settings(settings)
             self._update_device_selection(device)
+    
+    def _populate_device_list(self) -> None:
+        # Clear existing content safely
+        children = self.device_container.get_first_child()
+        while children:
+            self.device_container.remove(children)
+            children = self.device_container.get_first_child()
+        
+        self.devices = self._load_devices()
+        
+        # Update expander subtitle with current selection
+        if hasattr(self, 'device_expander'):
+            if self.selected_device_name:
+                self.device_expander.set_subtitle(self.selected_device_name)
+            else:
+                self.device_expander.set_subtitle("No device selected")
+        
+        if not self.devices:
+            no_devices_row = Adw.ActionRow()
+            no_devices_row.set_title("No devices found")
+            no_devices_row.set_sensitive(False)
+            self.device_container.append(no_devices_row)
+            return
+        
+        # Group devices by source/target status
+        source_devices = []
+        target_devices = []
+        
+        for device in self.devices:
+            if device['type'] == DEVICE_TYPE_SOURCE:
+                source_devices.append(device)
+            else:
+                target_devices.append(device)
+        
+        # Create sections
+        sections = [
+            ("Sources", source_devices),
+            ("Targets", target_devices)
+        ]
+        
+        for section_title, devices in sections:
+            if not devices:
+                continue
+                
+            # Create preference group for this section
+            group = Adw.PreferencesGroup()
+            group.set_margin_top(12)
+            group.set_margin_bottom(6)
+            
+            # Add devices to this group
+            for device in devices:
+                row = self._create_device_row(device)
+                group.add(row)
+                
+                # Highlight selected device
+                if device['id'] == self.selected_device_id:
+                    row.add_css_class("selected")
+            
+            self.device_container.append(group)
+    
+    def on_device_changed(self, combo_row: Adw.ComboRow, *args: Any) -> None:
+        # Keep for compatibility, but this won't be called with ActionRow
+        pass
     
     def on_volume_step_changed(self, spin_row: Adw.SpinRow, *args: Any) -> None:
         volume_step = int(spin_row.get_value())
@@ -712,8 +786,23 @@ class PipeWeaverAction(ActionBase):
                 self._update_device_selection(device)
     
     def _set_volume(self, volume: int) -> None:
-        if not self.selected_device_id or self._is_muted:
+        if not self.selected_device_id:
             return
+        
+        # Check if device is muted
+        try:
+            device_data = self._get_device_by_id(self.selected_device_id, self.selected_device_type)
+            if device_data:
+                if self.selected_device_type == DEVICE_TYPE_SOURCE:
+                    mute_states = device_data.get("mute_states", {}).get("mute_state", [])
+                    is_muted = "TargetA" in mute_states
+                else:
+                    is_muted = device_data.get("mute_state") == "Muted"
+                
+                if is_muted:
+                    return
+        except Exception:
+            pass
         
         volume = max(VOLUME_MIN, min(VOLUME_MAX, int(volume)))
         
@@ -723,8 +812,23 @@ class PipeWeaverAction(ActionBase):
             log.error(f"Error setting volume: {e}")
     
     def _set_volume_relative(self, delta: int) -> None:
-        if not self.selected_device_id or self._is_muted:
+        if not self.selected_device_id:
             return
+        
+        # Check if device is muted
+        try:
+            device_data = self._get_device_by_id(self.selected_device_id, self.selected_device_type)
+            if device_data:
+                if self.selected_device_type == DEVICE_TYPE_SOURCE:
+                    mute_states = device_data.get("mute_states", {}).get("mute_state", [])
+                    is_muted = "TargetA" in mute_states
+                else:
+                    is_muted = device_data.get("mute_state") == "Muted"
+                
+                if is_muted:
+                    return
+        except Exception:
+            pass
         
         try:
             delta = int(delta)
@@ -875,7 +979,6 @@ class PipeWeaverAction(ActionBase):
             self.volume,
             self._current_meter_a,
             self._current_meter_target,
-            self._is_muted,
             icon_path,
             self._meter_color,
             self._volume_bar_color,

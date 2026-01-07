@@ -41,7 +41,6 @@ VOLUME_PERCENTAGE_MAX: Final[float] = 100.0
 RADIUS_DIVISOR: Final[int] = 2
 GUTTER_MULTIPLIER: Final[int] = 2
 
-COLOR_MUTED_FILL: Final[tuple[int, int, int, int]] = (110, 110, 110, 255)
 COLOR_TARGET_FILL: Final[tuple[int, int, int, int]] = (102, 255, 102, 255)
 COLOR_SOURCE_FILL: Final[tuple[int, int, int, int]] = (102, 179, 255, 255)
 COLOR_METER: Final[tuple[int, int, int, int]] = (0, 0, 0, 255)
@@ -75,7 +74,7 @@ class KnobRenderer:
             return
         
         try:
-            image = self._render_device(self.action._is_muted)
+            image = self._render_device()
             
             if image:
                 set_image_on_action(self.action, image)
@@ -132,7 +131,7 @@ class KnobRenderer:
             'gutter_radius': gutter_radius,
         }
     
-    def _render_device(self, is_muted: bool = False) -> Optional[Image.Image]:
+    def _render_device(self) -> Optional[Image.Image]:
         """Unified rendering for both source and target devices."""
         volume = self.action.volume or 0
         device_color = self.action._device_color or {}
@@ -142,13 +141,12 @@ class KnobRenderer:
             layout = self._get_layout_constants()
             surface, ctx = create_cairo_surface(layout['image_width'], layout['image_height'])
 
+
             effective_fill_width = (volume / VOLUME_PERCENTAGE_MAX) * layout['bar_width']
             
             fill_color = None
             if effective_fill_width > 0:
-                if is_muted:
-                    fill_color = COLOR_MUTED_FILL
-                elif self.action._volume_bar_color:
+                if self.action._volume_bar_color:
                     fill_color = self.action._volume_bar_color
                 elif device_color:
                     fill_color = (device_color.get('red', 0), device_color.get('green', 0), 

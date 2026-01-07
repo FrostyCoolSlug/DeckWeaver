@@ -133,7 +133,6 @@ class DeckWeaver(PluginBase):
                 "pipeweaver": "pipeweaver.png",
                 "audio": "audio.png",
                 "volume": "volume.png",
-                "mute": "mute.png",
                 "a-b-outline": "a-b-outline.png"
             }
             

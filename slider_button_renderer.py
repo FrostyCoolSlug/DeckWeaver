@@ -36,7 +36,6 @@ BAR_HORIZONTAL_OFFSET: Final[int] = 0
 BAR_VERTICAL_OFFSET: Final[int] = 3
 GUTTER_MULTIPLIER: Final[int] = 2
 VOLUME_PERCENTAGE_MAX: Final[float] = 100.0
-COLOR_MUTED_FILL: Final[tuple[int, int, int, int]] = (110, 110, 110, 255)
 COLOR_TARGET_FILL: Final[tuple[int, int, int, int]] = (102, 255, 102, 255)
 COLOR_SOURCE_FILL: Final[tuple[int, int, int, int]] = (102, 179, 255, 255)
 COLOR_METER: Final[tuple[int, int, int, int]] = (0, 0, 0, 255)
@@ -259,9 +258,7 @@ class SliderButtonRenderer:
             
             fill_color = None
             if effective_fill_height > 0:
-                if self.action._is_muted:
-                    fill_color = COLOR_MUTED_FILL
-                elif self.action._volume_bar_color:
+                if self.action._volume_bar_color:
                     fill_color = self.action._volume_bar_color
                 elif device_color:
                     fill_color = (device_color.get('red', 0), device_color.get('green', 0), 
