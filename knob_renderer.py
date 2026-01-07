@@ -103,11 +103,11 @@ class KnobRenderer:
         bar_width = self.screen_width - left_margin - right_margin
         bar_y = self.screen_height - BAR_HEIGHT - CORNER_INSET - BAR_VERTICAL_OFFSET
         bar_x = left_margin + BAR_HORIZONTAL_OFFSET
-        gutter_x = bar_x - BAR_GUTTER_SIZE
-        gutter_y = bar_y - BAR_GUTTER_SIZE
-        gutter_width = bar_width + (BAR_GUTTER_SIZE * GUTTER_MULTIPLIER)
-        gutter_height = BAR_HEIGHT + (BAR_GUTTER_SIZE * GUTTER_MULTIPLIER)
-        gutter_radius = (BAR_HEIGHT / RADIUS_DIVISOR) + BAR_GUTTER_SIZE
+        gutter_x = bar_x
+        gutter_y = bar_y
+        gutter_width = bar_width
+        gutter_height = BAR_HEIGHT
+        gutter_radius = BAR_HEIGHT / RADIUS_DIVISOR
         
         return {
             'image_width': self.screen_width,
@@ -155,6 +155,15 @@ class KnobRenderer:
             set_cairo_color(ctx, gutter_bg)
             self._draw_rounded_rect(ctx, layout['gutter_x'], layout['gutter_y'], layout['gutter_width'], layout['gutter_height'], layout['gutter_radius'])
             ctx.fill()
+            
+            # Add 2px stroke around gutter (outside)
+            stroke_offset = 1  # 2px stroke / 2
+            set_cairo_color(ctx, (0, 0, 0, 255))  # Black stroke
+            ctx.set_line_width(2)
+            self._draw_rounded_rect(ctx, layout['gutter_x'] - stroke_offset, layout['gutter_y'] - stroke_offset, 
+                                   layout['gutter_width'] + 2, layout['gutter_height'] + 2, 
+                                   layout['gutter_radius'] + stroke_offset)
+            ctx.stroke()
 
             if effective_fill_width > 0 and fill_color:
                 set_cairo_color(ctx, fill_color)

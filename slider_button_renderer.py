@@ -200,11 +200,11 @@ class SliderButtonRenderer:
         slider_height = double_height - (corner_inset * 2) - BAR_VERTICAL_OFFSET
         slider_x = (size - bar_width) // 2 + BAR_HORIZONTAL_OFFSET
         
-        gutter_x = slider_x - bar_gutter_size
-        gutter_y = slider_y - bar_gutter_size
-        gutter_width = bar_width + (bar_gutter_size * GUTTER_MULTIPLIER)
-        gutter_height = slider_height + (bar_gutter_size * GUTTER_MULTIPLIER)
-        gutter_radius = (slider_height / RADIUS_DIVISOR) + bar_gutter_size
+        gutter_x = slider_x
+        gutter_y = slider_y
+        gutter_width = bar_width
+        gutter_height = slider_height
+        gutter_radius = slider_height / RADIUS_DIVISOR
         
         return {
             'button_size': size,
@@ -267,6 +267,16 @@ class SliderButtonRenderer:
             set_cairo_color(ctx, gutter_bg)
             self._draw_rounded_rect_vertical(ctx, gutter_x, gutter_y, gutter_width, gutter_height, gutter_radius)
             ctx.fill()
+            
+            # Add 2px stroke around gutter (outside)
+            stroke_width = 2 * scale_factor
+            stroke_offset = stroke_width / 2
+            set_cairo_color(ctx, (0, 0, 0, 255))  # Black stroke
+            ctx.set_line_width(stroke_width)
+            self._draw_rounded_rect_vertical(ctx, gutter_x - stroke_offset, gutter_y - stroke_offset, 
+                                            gutter_width + stroke_width, gutter_height + stroke_width, 
+                                            gutter_radius + stroke_offset)
+            ctx.stroke()
             
             if effective_fill_height > 0 and fill_color:
                 set_cairo_color(ctx, fill_color)
