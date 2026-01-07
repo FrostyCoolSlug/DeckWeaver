@@ -268,10 +268,13 @@ class SliderButtonRenderer:
             self._draw_rounded_rect_vertical(ctx, gutter_x, gutter_y, gutter_width, gutter_height, gutter_radius)
             ctx.fill()
             
-            # Add 2px stroke around gutter (outside)
-            stroke_width = 2 * scale_factor
+            # Add stroke around gutter (outside) - 4px when muted, 2px when unmuted
+            is_muted = self.action._is_device_muted()
+            stroke_width = (4 if is_muted else 2) * scale_factor
             stroke_offset = stroke_width / 2
-            set_cairo_color(ctx, (0, 0, 0, 255))  # Black stroke
+            # Use red stroke when muted, black otherwise
+            stroke_color = (255, 0, 0, 255) if is_muted else (0, 0, 0, 255)
+            set_cairo_color(ctx, stroke_color)
             ctx.set_line_width(stroke_width)
             self._draw_rounded_rect_vertical(ctx, gutter_x - stroke_offset, gutter_y - stroke_offset, 
                                             gutter_width + stroke_width, gutter_height + stroke_width, 

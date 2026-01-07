@@ -156,12 +156,16 @@ class KnobRenderer:
             self._draw_rounded_rect(ctx, layout['gutter_x'], layout['gutter_y'], layout['gutter_width'], layout['gutter_height'], layout['gutter_radius'])
             ctx.fill()
             
-            # Add 2px stroke around gutter (outside)
-            stroke_offset = 1  # 2px stroke / 2
-            set_cairo_color(ctx, (0, 0, 0, 255))  # Black stroke
-            ctx.set_line_width(2)
+            # Add stroke around gutter (outside) - 4px when muted, 2px when unmuted
+            is_muted = self.action._is_device_muted()
+            stroke_width = 4 if is_muted else 2
+            stroke_offset = stroke_width / 2
+            # Use red stroke when muted, black otherwise
+            stroke_color = (255, 0, 0, 255) if is_muted else (0, 0, 0, 255)
+            set_cairo_color(ctx, stroke_color)
+            ctx.set_line_width(stroke_width)
             self._draw_rounded_rect(ctx, layout['gutter_x'] - stroke_offset, layout['gutter_y'] - stroke_offset, 
-                                   layout['gutter_width'] + 2, layout['gutter_height'] + 2, 
+                                   layout['gutter_width'] + stroke_width, layout['gutter_height'] + stroke_width, 
                                    layout['gutter_radius'] + stroke_offset)
             ctx.stroke()
 
@@ -180,6 +184,32 @@ class KnobRenderer:
             
             image = cairo_to_pil(surface)
             self._composite_icon(image, layout['icon_left_x'], layout['icon_bottom_y'], layout['icon_max_size'])
+            
+            # Draw red diagonal line across icon container when muted
+            if self.action._is_device_muted():
+                # Create a new surface for the line overlay
+                line_surface, line_ctx = create_cairo_surface(layout['image_width'], layout['image_height'])
+                line_ctx.set_antialias(cairo.ANTIALIAS_BEST)
+                
+                # Draw thick red diagonal line from bottom-left to top-right of icon container
+                icon_top_y = layout['icon_bottom_y'] + layout['icon_max_size']
+                icon_right_x = layout['icon_left_x'] + layout['icon_max_size']
+                
+                set_cairo_color(line_ctx, (255, 0, 0, 255))
+                line_ctx.set_line_width(6)  # Thick red line
+                line_ctx.set_line_cap(cairo.LINE_CAP_ROUND)
+                line_ctx.move_to(layout['icon_left_x'], icon_top_y)  # Bottom-left corner
+                line_ctx.line_to(icon_right_x, layout['icon_bottom_y'])  # Top-right corner
+                line_ctx.stroke()
+                
+                # Composite the line over the image
+                line_image = cairo_to_pil(line_surface)
+                if line_image.mode != 'RGBA':
+                    line_image = line_image.convert('RGBA')
+                if image.mode != 'RGBA':
+                    image = image.convert('RGBA')
+                image = Image.alpha_composite(image, line_image)
+            
             return image
         except Exception as img_e:
             log.error(f"Error creating device image: {img_e}")

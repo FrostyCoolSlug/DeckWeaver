@@ -318,8 +318,8 @@ class PipeWeaverAction(ActionBase):
         
         # Create a container for device groups inside the expander
         self.device_container = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
-        self.device_container.set_margin_start(18)
-        self.device_container.set_margin_end(18)
+        self.device_container.set_margin_start(30)
+        self.device_container.set_margin_end(30)
         self.device_container.set_margin_bottom(12)
         
         # Wrap in a ScrolledWindow for better UX with many devices
