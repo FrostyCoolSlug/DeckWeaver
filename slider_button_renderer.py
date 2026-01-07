@@ -268,24 +268,20 @@ class SliderButtonRenderer:
             self._draw_rounded_rect_vertical(ctx, gutter_x, gutter_y, gutter_width, gutter_height, gutter_radius)
             ctx.fill()
             
-            # Add stroke around gutter (outside) - 4px when muted, 2px when unmuted
-            is_muted = self.action._is_device_muted()
-            stroke_width = (4 if is_muted else 2) * scale_factor
-            stroke_offset = stroke_width / 2
-            # Use red stroke when muted, black otherwise
-            stroke_color = (255, 0, 0, 255) if is_muted else (0, 0, 0, 255)
-            set_cairo_color(ctx, stroke_color)
-            ctx.set_line_width(stroke_width)
-            self._draw_rounded_rect_vertical(ctx, gutter_x - stroke_offset, gutter_y - stroke_offset, 
-                                            gutter_width + stroke_width, gutter_height + stroke_width, 
-                                            gutter_radius + stroke_offset)
-            ctx.stroke()
-            
             if effective_fill_height > 0 and fill_color:
                 set_cairo_color(ctx, fill_color)
                 slider_fill_y = slider_y + slider_height - effective_fill_height
                 self._draw_rounded_rect_vertical(ctx, slider_x, slider_fill_y, slider_width, effective_fill_height, slider_radius, top_end_flat=False)
                 ctx.fill()
+            
+            # Add stroke around gutter - 2px for both muted and unmuted
+            stroke_width = 2 * scale_factor
+            set_cairo_color(ctx, (0, 0, 0, 255))  # Always black
+            ctx.set_line_width(stroke_width)
+            self._draw_rounded_rect_vertical(ctx, gutter_x, gutter_y, 
+                                            gutter_width, gutter_height, 
+                                            gutter_radius)
+            ctx.stroke()
             
             meter_value = self.action._current_meter_a if is_source else self.action._current_meter_target
             if self.action._meters_enabled and meter_value > 0 and effective_fill_height > 0 and fill_color:

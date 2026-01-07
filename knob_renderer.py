@@ -155,24 +155,20 @@ class KnobRenderer:
             set_cairo_color(ctx, gutter_bg)
             self._draw_rounded_rect(ctx, layout['gutter_x'], layout['gutter_y'], layout['gutter_width'], layout['gutter_height'], layout['gutter_radius'])
             ctx.fill()
-            
-            # Add stroke around gutter (outside) - 4px when muted, 2px when unmuted
-            is_muted = self.action._is_device_muted()
-            stroke_width = 4 if is_muted else 2
-            stroke_offset = stroke_width / 2
-            # Use red stroke when muted, black otherwise
-            stroke_color = (255, 0, 0, 255) if is_muted else (0, 0, 0, 255)
-            set_cairo_color(ctx, stroke_color)
-            ctx.set_line_width(stroke_width)
-            self._draw_rounded_rect(ctx, layout['gutter_x'] - stroke_offset, layout['gutter_y'] - stroke_offset, 
-                                   layout['gutter_width'] + stroke_width, layout['gutter_height'] + stroke_width, 
-                                   layout['gutter_radius'] + stroke_offset)
-            ctx.stroke()
 
             if effective_fill_width > 0 and fill_color:
                 set_cairo_color(ctx, fill_color)
                 self._draw_rounded_rect(ctx, layout['bar_x'], layout['bar_y'], effective_fill_width, layout['bar_height'], layout['bar_radius'], right_end_flat=False)
                 ctx.fill()
+            
+            # Add stroke around gutter - 2px for both muted and unmuted
+            stroke_width = 2
+            set_cairo_color(ctx, (0, 0, 0, 255))  # Always black
+            ctx.set_line_width(stroke_width)
+            self._draw_rounded_rect(ctx, layout['gutter_x'], layout['gutter_y'], 
+                                   layout['gutter_width'], layout['gutter_height'], 
+                                   layout['gutter_radius'])
+            ctx.stroke()
             
             meter_value = self.action._current_meter_a if is_source else self.action._current_meter_target
             if self.action._meters_enabled and meter_value > 0 and effective_fill_width > 0 and fill_color:
