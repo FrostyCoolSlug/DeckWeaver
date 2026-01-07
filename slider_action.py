@@ -12,31 +12,28 @@ from .action_base import (
     COLOR_METER,
     DEFAULT_VOLUME_STEP,
     MAX_VOLUME_STEP,
-    MIN_VOLUME_STEP,
     PipeWeaverAction,
 )
 from .pipeweaver_helpers import DEVICE_TYPE_SOURCE
 from .service_monitor import is_service_available
-from loguru import logger as log  # type: ignore
 
 
 class PipeWeaverSliderAction(PipeWeaverAction):
     @property
     def is_top_slider(self) -> bool:
-        """Determine if this is the top slider based on step sign"""
         return self.volume_step > 0
     
+    def _get_renderer(self):
+        from .slider_button_renderer import SliderButtonRenderer
+        return SliderButtonRenderer(self)
+    
     def event_callback(self, event: Any, data: Any) -> None:
-        # Handle button press events - SHORT_UP is the event for button press/release
         if event == Input.Key.Events.SHORT_UP or str(event) == "Key Short Up" or "Short Up" in str(event):
             if not self.selected_device_id:
-                direction = "up" if self.is_top_slider else "down"
-                log.warning(f"Volume {direction} button pressed but no device selected")
                 return
             self._set_volume_relative(self.volume_step)
     
     def get_config_rows(self):
-        """Config - device (source only), volume step"""
         if not is_service_available():
             error_row = Adw.ActionRow()
             error_row.set_title(self.plugin_base.lm.get("ui.error.not_running.title"))
@@ -53,8 +50,7 @@ class PipeWeaverSliderAction(PipeWeaverAction):
             title=self.plugin_base.lm.get("ui.device.title")
         )
         
-        self.device_selector.connect("notify::selected-item", self.on_device_changed)
-        self._populate_device_list_source_only()
+        self._populate_device_list(DEVICE_TYPE_SOURCE)
         
         refresh_button = Gtk.Button(
             icon_name="view-refresh-symbolic",
@@ -147,77 +143,11 @@ class PipeWeaverSliderAction(PipeWeaverAction):
             volume_bar_color_row,
         ]
     
-    def _populate_device_list_source_only(self) -> None:
-        """Populate device list with source devices only"""
-        handler_blocked = False
-        if hasattr(self, 'device_selector'):
-            try:
-                self.device_selector.handler_block_by_func(self.on_device_changed)
-                handler_blocked = True
-            except (AttributeError, TypeError):
-                pass
-        
-        if hasattr(self, 'device_model'):
-            while self.device_model.get_n_items() > 0:
-                self.device_model.remove(0)
-        
-        all_devices = self._load_devices()
-        # Filter to source devices only
-        self.devices = [d for d in all_devices if d['type'] == DEVICE_TYPE_SOURCE]
-        
-        # Ensure device type is set to source
-        self.selected_device_type = DEVICE_TYPE_SOURCE
-        # Update settings to ensure device_type is saved
-        if self.selected_device_id:
-            settings = self.get_settings()
-            settings["device_type"] = DEVICE_TYPE_SOURCE
-            self.set_settings(settings)
-        
-        for device in self.devices:
-            self.device_model.append(device['name'])
-        
-        if self.selected_device_id:
-            for i, device in enumerate(self.devices):
-                if device['id'] == self.selected_device_id:
-                    self.device_selector.set_selected(i)
-                    if handler_blocked:
-                        self.device_selector.handler_unblock_by_func(self.on_device_changed)
-                    return
-        
-        if self.devices:
-            self.device_selector.set_selected(0)
-            if not self.selected_device_id:
-                settings = self.get_settings()
-                device = self.devices[0]
-                settings["device_id"] = device['id']
-                settings["device_type"] = DEVICE_TYPE_SOURCE  # Force source type
-                settings.pop("device_name", None)
-                if not self._is_initializing:
-                    self.set_settings(settings)
-                    self._update_device_selection(device)
-        
-        if handler_blocked:
-            self.device_selector.handler_unblock_by_func(self.on_device_changed)
-    
-    def on_device_changed(self, combo_row: Adw.ComboRow, *args: Any) -> None:
-        """Handle device selection change - ensure source type"""
-        selected_index = combo_row.get_selected()
-        if selected_index is not None and selected_index < len(self.devices):
-            device = self.devices[selected_index]
-            settings = self.get_settings()
-            settings["device_id"] = device['id']
-            settings["device_type"] = DEVICE_TYPE_SOURCE  # Force source type
-            settings.pop("device_name", None)
-            self.set_settings(settings)
-            self._update_device_selection(device)
-    
     def on_refresh_clicked(self, button: Gtk.Button) -> None:
-        """Refresh device list"""
         self._ensure_connection_and_load_devices()
-        self._populate_device_list_source_only()
+        self._populate_device_list(DEVICE_TYPE_SOURCE)
     
     def on_volume_step_changed(self, spin_row: Adw.SpinRow, *args: Any) -> None:
-        """Handle volume step change"""
         volume_step = int(spin_row.get_value())
         settings = self.get_settings()
         settings['volume_step'] = volume_step
@@ -225,21 +155,13 @@ class PipeWeaverSliderAction(PipeWeaverAction):
         self.volume_step = volume_step
     
     def on_orientation_changed(self, combo: Gtk.ComboBoxText, *args: Any) -> None:
-        """Handle orientation change"""
         orientation = combo.get_active_id()
         settings = self.get_settings()
         settings["orientation"] = orientation
         self.set_settings(settings)
         
-        # Update the orientation property immediately
         self.orientation = orientation
-        
-        # Force complete redraw by clearing draw state and calling update_image directly
         self._last_draw_state = None
-        
-        # Also clear any cached images to ensure fresh render
         if hasattr(self, '_image_cache'):
             self._image_cache.clear()
-        
-        # Force immediate update
         self.update_image()

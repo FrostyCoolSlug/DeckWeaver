@@ -185,8 +185,5 @@ class DeckWeaver(PluginBase):
             self.set_settings(settings)
             self.load_and_apply_settings()
     
-    def on_enable(self) -> None:
-        pass
-    
     def on_disable(self) -> None:
         stop_monitor()

@@ -85,20 +85,26 @@ class PipeWeaverAction(ActionBase):
         devices_tree = get_devices_tree(status_data)
         return get_device_by_id(devices_tree, device_id, device_type)
     
-    def _toggle_mute(self) -> None:
+    def _is_device_muted(self) -> bool:
         if not self.selected_device_id:
-            return
+            return False
         try:
-            # Determine current mute state from device data
             device_data = self._get_device_by_id(self.selected_device_id, self.selected_device_type)
             if device_data:
                 if self.selected_device_type == DEVICE_TYPE_SOURCE:
                     mute_states = device_data.get("mute_states", {}).get("mute_state", [])
-                    is_muted = "TargetA" in mute_states
-                else:
-                    is_muted = device_data.get("mute_state") == "Muted"
-                
-                (self.client.unmute_device if is_muted else self.client.mute_device)(self.selected_device_id)
+                    return "TargetA" in mute_states
+                return device_data.get("mute_state") == "Muted"
+        except Exception:
+            pass
+        return False
+    
+    def _toggle_mute(self) -> None:
+        if not self.selected_device_id:
+            return
+        try:
+            is_muted = self._is_device_muted()
+            (self.client.unmute_device if is_muted else self.client.mute_device)(self.selected_device_id)
         except Exception as e:
             log.error(f"Error toggling mute: {e}")
     
@@ -196,42 +202,27 @@ class PipeWeaverAction(ActionBase):
         try:
             if status_data is None:
                 status_data = self.client._get_status()
+            
             if not status_data:
                 self._device_color = {}
-                self._last_draw_state = None
-                self._update_volume_bar_color_button()
-                return
-            
-            devices_tree = get_devices_tree(status_data)
-            device_data = get_device_by_id(devices_tree, self.selected_device_id, self.selected_device_type)
-            if device_data:
-                desc = device_data.get("description", {})
-                
-                new_name = desc.get("name")
-                if new_name and new_name != self.selected_device_name:
-                    self.selected_device_name = new_name
-                    self._last_draw_state = None
-                
-                color = desc.get("colour", {})
-                new_color = color if isinstance(color, dict) else {}
-                if self._device_color != new_color:
-                    self._device_color = new_color
-                    self._last_draw_state = None
-                
-                
-                new_volume = self._extract_volume_from_device_data(device_data)
-                if self.volume != new_volume:
-                    self.volume = new_volume
-                    self._last_draw_state = None
             else:
-                self._device_color = {}
-                self._last_draw_state = None
-            
-            self._update_volume_bar_color_button()
+                devices_tree = get_devices_tree(status_data)
+                device_data = get_device_by_id(devices_tree, self.selected_device_id, self.selected_device_type)
+                if device_data:
+                    desc = device_data.get("description", {})
+                    new_name = desc.get("name")
+                    if new_name and new_name != self.selected_device_name:
+                        self.selected_device_name = new_name
+                    color = desc.get("colour", {})
+                    self._device_color = color if isinstance(color, dict) else {}
+                    self.volume = self._extract_volume_from_device_data(device_data)
+                else:
+                    self._device_color = {}
         except Exception:
             self._device_color = {}
-            self._last_draw_state = None
-            self._update_volume_bar_color_button()
+        
+        self._last_draw_state = None
+        self._update_volume_bar_color_button()
     
     def _create_rgba_from_color(self, color: Optional[tuple[int, int, int, int]] = None, device_color: Optional[dict[str, Any]] = None) -> Gdk.RGBA:
         """Create Gdk.RGBA from tuple color or device color dict"""
@@ -528,21 +519,21 @@ class PipeWeaverAction(ActionBase):
             self.set_settings(settings)
             self._update_device_selection(device)
     
-    def _populate_device_list(self) -> None:
-        # Clear existing content safely
+    def _populate_device_list(self, device_type_filter: Optional[str] = None) -> None:
         children = self.device_container.get_first_child()
         while children:
             self.device_container.remove(children)
             children = self.device_container.get_first_child()
         
-        self.devices = self._load_devices()
+        all_devices = self._load_devices()
+        if device_type_filter:
+            self.devices = [d for d in all_devices if d['type'] == device_type_filter]
+            self.selected_device_type = device_type_filter
+        else:
+            self.devices = all_devices
         
-        # Update expander subtitle with current selection
         if hasattr(self, 'device_expander'):
-            if self.selected_device_name:
-                self.device_expander.set_subtitle(self.selected_device_name)
-            else:
-                self.device_expander.set_subtitle("No device selected")
+            self.device_expander.set_subtitle(self.selected_device_name or "No device selected")
         
         if not self.devices:
             no_devices_row = Adw.ActionRow()
@@ -551,45 +542,21 @@ class PipeWeaverAction(ActionBase):
             self.device_container.append(no_devices_row)
             return
         
-        # Group devices by source/target status
-        source_devices = []
-        target_devices = []
+        source_devices = [d for d in self.devices if d['type'] == DEVICE_TYPE_SOURCE]
+        target_devices = [d for d in self.devices if d['type'] == DEVICE_TYPE_TARGET]
         
-        for device in self.devices:
-            if device['type'] == DEVICE_TYPE_SOURCE:
-                source_devices.append(device)
-            else:
-                target_devices.append(device)
-        
-        # Create sections
-        sections = [
-            ("Sources", source_devices),
-            ("Targets", target_devices)
-        ]
-        
-        for section_title, devices in sections:
+        for section_title, devices in [("Sources", source_devices), ("Targets", target_devices)]:
             if not devices:
                 continue
-                
-            # Create preference group for this section
             group = Adw.PreferencesGroup()
             group.set_margin_top(12)
             group.set_margin_bottom(6)
-            
-            # Add devices to this group
             for device in devices:
                 row = self._create_device_row(device)
                 group.add(row)
-                
-                # Highlight selected device
                 if device['id'] == self.selected_device_id:
                     row.add_css_class("selected")
-            
             self.device_container.append(group)
-    
-    def on_device_changed(self, combo_row: Adw.ComboRow, *args: Any) -> None:
-        # Keep for compatibility, but this won't be called with ActionRow
-        pass
     
     def on_volume_step_changed(self, spin_row: Adw.SpinRow, *args: Any) -> None:
         volume_step = int(spin_row.get_value())
@@ -786,24 +753,8 @@ class PipeWeaverAction(ActionBase):
                 self._update_device_selection(device)
     
     def _set_volume(self, volume: int) -> None:
-        if not self.selected_device_id:
+        if not self.selected_device_id or self._is_device_muted():
             return
-        
-        # Check if device is muted
-        try:
-            device_data = self._get_device_by_id(self.selected_device_id, self.selected_device_type)
-            if device_data:
-                if self.selected_device_type == DEVICE_TYPE_SOURCE:
-                    mute_states = device_data.get("mute_states", {}).get("mute_state", [])
-                    is_muted = "TargetA" in mute_states
-                else:
-                    is_muted = device_data.get("mute_state") == "Muted"
-                
-                if is_muted:
-                    return
-        except Exception:
-            pass
-        
         volume = max(VOLUME_MIN, min(VOLUME_MAX, int(volume)))
         
         try:
@@ -812,34 +763,12 @@ class PipeWeaverAction(ActionBase):
             log.error(f"Error setting volume: {e}")
     
     def _set_volume_relative(self, delta: int) -> None:
-        if not self.selected_device_id:
+        if not self.selected_device_id or self._is_device_muted():
             return
-        
-        # Check if device is muted
-        try:
-            device_data = self._get_device_by_id(self.selected_device_id, self.selected_device_type)
-            if device_data:
-                if self.selected_device_type == DEVICE_TYPE_SOURCE:
-                    mute_states = device_data.get("mute_states", {}).get("mute_state", [])
-                    is_muted = "TargetA" in mute_states
-                else:
-                    is_muted = device_data.get("mute_state") == "Muted"
-                
-                if is_muted:
-                    return
-        except Exception:
-            pass
-        
-        try:
-            delta = int(delta)
-        except (ValueError, TypeError):
-            return
-
         try:
             current_volume = self._get_current_volume() or 0
             if (current_volume >= VOLUME_MAX and delta > 0) or (current_volume <= VOLUME_MIN and delta < 0):
                 return
-            
             self.client.set_volume_relative(self.selected_device_id, delta, current_volume)
         except Exception as e:
             log.error(f"Error setting volume relative: {e}")
@@ -895,7 +824,6 @@ class PipeWeaverAction(ActionBase):
         self._stop_meter_client()
     
     def _on_service_state_change(self, available: bool) -> None:
-        # Update cached service availability
         self._cached_service_available = available
         if available:
             self._load_devices_async()
@@ -909,8 +837,7 @@ class PipeWeaverAction(ActionBase):
         
         if node_id != self.selected_device_id:
             return
-
-        # Only update if meter value actually changed
+        
         if self.selected_device_type == DEVICE_TYPE_SOURCE:
             if self._current_meter_a == percent:
                 return
@@ -955,6 +882,9 @@ class PipeWeaverAction(ActionBase):
         except Exception as e:
             log.error(f"Error handling patch update: {e}")
     
+    def _get_renderer(self):
+        return KnobRenderer(self)
+    
     def update_image(self):
         icon_path = self.icon_path_from_picker
         if icon_path:
@@ -964,9 +894,6 @@ class PipeWeaverAction(ActionBase):
                 pass
 
         device_color_tuple = tuple(sorted(self._device_color.items())) if self._device_color else ()
-        
-        # Cache service availability to avoid calling it on every update
-        # Only refresh if we don't have a cached value or if it might have changed
         service_available = getattr(self, '_cached_service_available', None)
         if service_available is None:
             service_available = is_service_available()
@@ -995,24 +922,7 @@ class PipeWeaverAction(ActionBase):
         def _do_render():
             try:
                 self._set_all_labels(self._get_device_name_display(), only_if_service_available=True)
-
-                # Use appropriate renderer based on action type
-                from .volume_up_button_action import PipeWeaverVolumeUpButtonAction
-                from .volume_down_button_action import PipeWeaverVolumeDownButtonAction
-                from .slider_action import PipeWeaverSliderAction
-                from .slider_button_renderer import SliderButtonRenderer
-                from .volume_button_renderer import VolumeButtonRenderer
-                
-                if isinstance(self, PipeWeaverVolumeUpButtonAction):
-                    image_renderer = VolumeButtonRenderer(self, is_plus=True)
-                elif isinstance(self, PipeWeaverVolumeDownButtonAction):
-                    image_renderer = VolumeButtonRenderer(self, is_plus=False)
-                elif isinstance(self, PipeWeaverSliderAction):
-                    image_renderer = SliderButtonRenderer(self)
-                else:
-                    image_renderer = KnobRenderer(self)
-                
-                image_renderer.render_image()
+                self._get_renderer().render_image()
             except Exception as e:
                 log.error(f"Error rendering image: {e}")
             return False

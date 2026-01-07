@@ -85,4 +85,3 @@ def get_device_by_id(
                 return device
     
     return None
-

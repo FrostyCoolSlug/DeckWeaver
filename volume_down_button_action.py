@@ -12,20 +12,20 @@ from src.backend.DeckManagement.InputIdentifier import Input  # type: ignore
 
 from .action_base import PipeWeaverAction
 from .service_monitor import is_service_available
-from loguru import logger as log  # type: ignore
 
 
 class PipeWeaverVolumeDownButtonAction(PipeWeaverAction):
+    def _get_renderer(self):
+        from .volume_button_renderer import VolumeButtonRenderer
+        return VolumeButtonRenderer(self, is_plus=False)
+    
     def event_callback(self, event: Any, data: Any) -> None:
-        # Handle button press events - SHORT_UP is the event for button press/release
         if event == Input.Key.Events.SHORT_UP or str(event) == "Key Short Up" or "Short Up" in str(event):
             if not self.selected_device_id:
-                log.warning("Volume down button pressed but no device selected")
                 return
             self._set_volume_relative(-self.volume_step)
     
     def get_config_rows(self):
-        """Simplified config - only device and icon selection"""
         if not is_service_available():
             error_row = Adw.ActionRow()
             error_row.set_title(self.plugin_base.lm.get("ui.error.not_running.title"))

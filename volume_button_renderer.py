@@ -1,5 +1,4 @@
 """Volume button rendering for PipeWeaver vol+ and vol- buttons"""
-import math
 from typing import Final, Optional
 
 import cairo  # type: ignore

@@ -94,7 +94,6 @@ class KnobRenderer:
             except Exception:
                 pass
     
-    
     def _get_layout_constants(self) -> dict[str, int]:
         icon_left_x = CORNER_INSET
         icon_bottom_y = self.screen_height - ICON_MAX_SIZE - CORNER_INSET
@@ -140,8 +139,6 @@ class KnobRenderer:
         try:
             layout = self._get_layout_constants()
             surface, ctx = create_cairo_surface(layout['image_width'], layout['image_height'])
-
-
             effective_fill_width = (volume / VOLUME_PERCENTAGE_MAX) * layout['bar_width']
             
             fill_color = None
@@ -178,7 +175,6 @@ class KnobRenderer:
         except Exception as img_e:
             log.error(f"Error creating device image: {img_e}")
             return None
-    
     
     def _draw_rounded_rect(
         self,
@@ -286,5 +282,4 @@ class KnobRenderer:
                 
                 image.paste(icon_resized, (final_icon_left_x, final_icon_bottom_y), icon_resized)
         except Exception as e:
-            log.warning(f"Error compositing icon: {e}")
-    
+            log.warning(f"Error compositing icon: {e}")    

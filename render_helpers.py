@@ -27,7 +27,6 @@ COLOR_SERVICE_UNAVAILABLE_BG: Final[tuple[int, int, int, int]] = (255, 193, 7, 2
 COLOR_SERVICE_UNAVAILABLE_TEXT: Final[tuple[int, int, int, int]] = (33, 33, 33, 255)
 COLOR_SERVICE_UNAVAILABLE_HINT: Final[tuple[int, int, int, int]] = (66, 66, 66, 255)
 
-
 GUTTER_COLOR_DARK: Final[tuple[int, int, int, int]] = (70, 70, 70, 255)
 GUTTER_COLOR_LIGHT: Final[tuple[int, int, int, int]] = (180, 180, 180, 255)
 GUTTER_LUMINANCE_THRESHOLD: Final[float] = 0.1

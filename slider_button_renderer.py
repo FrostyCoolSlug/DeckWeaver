@@ -49,8 +49,6 @@ class SliderButtonRenderer:
     
     @property
     def is_top(self) -> bool:
-        """Determine if this is the top/left slider based on action's step sign and orientation"""
-        orientation = getattr(self.action, 'orientation', 'vertical')
         step = getattr(self.action, 'volume_step', 5)
         return step > 0
     
@@ -95,7 +93,6 @@ class SliderButtonRenderer:
                     set_image_on_action(self.action, fallback_image)
             except Exception:
                 pass
-    
     
     def _draw_rounded_rect_vertical(
         self,
@@ -314,5 +311,4 @@ class SliderButtonRenderer:
             return result_image
         except Exception as img_e:
             log.error(f"Error creating slider image: {img_e}")
-            return None
-    
+            return None    

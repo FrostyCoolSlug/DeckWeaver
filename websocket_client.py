@@ -37,7 +37,6 @@ from .pipeweaver_helpers import (
     DEVICE_TYPE_TARGET,
     DevicesTree,
     get_device_by_id,
-    get_device_list,
     get_devices_tree,
 )
 
@@ -349,7 +348,6 @@ class PipeWeaverWebSocketClient:
                 self.status = {}
             apply_status_patch(self.status, patch)
             status_snapshot = self.status.copy()
-
         for cb in self._get_patch_callbacks_snapshot():
             try:
                 cb(status_snapshot)
@@ -496,7 +494,7 @@ class PipeWeaverWebSocketClient:
             return False
         new_volume = max(0, min(100, current_volume + delta))
         return self.set_volume(device_id, new_volume)
-    
+
 
 def acquire_shared_pipeweaver_client(
     patch_callback: Optional[PatchCallback] = None,
