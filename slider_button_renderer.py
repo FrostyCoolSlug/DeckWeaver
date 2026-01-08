@@ -28,7 +28,7 @@ BAR_WIDTH: Final[int] = 25
 BAR_RADIUS: Final[int] = 10
 BAR_GUTTER_SIZE: Final[int] = 3
 CORNER_INSET: Final[int] = 10
-METER_WIDTH: Final[int] = 15
+METER_WIDTH: Final[int] = 11
 METER_VERTICAL_MARGIN: Final[int] = 2
 
 # Fixed constants
@@ -281,7 +281,7 @@ class SliderButtonRenderer:
                 meter_x = slider_x + (slider_width - layout['meter_width']) // 2
                 # Position meter further away from bottom with more padding
                 meter_y_offset = int(layout['meter_vertical_margin'] * 4) + 1  # More padding from bottom
-                meter_start_y = slider_fill_y + meter_y_offset
+                meter_start_y = slider_fill_y + meter_y_offset - 3
                 meter_available_height = int(effective_fill_height) - meter_y_offset - layout['meter_vertical_margin']
                 
                 if meter_available_height > 0:
