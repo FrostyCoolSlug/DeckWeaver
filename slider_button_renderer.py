@@ -24,11 +24,11 @@ from .service_monitor import is_service_available
 
 # Base pixel values for 64px button - easy to edit
 BASE_BUTTON_SIZE: Final[int] = 64
-BAR_WIDTH: Final[int] = 15
+BAR_WIDTH: Final[int] = 25
 BAR_RADIUS: Final[int] = 10
 BAR_GUTTER_SIZE: Final[int] = 3
 CORNER_INSET: Final[int] = 10
-METER_WIDTH: Final[int] = 6
+METER_WIDTH: Final[int] = 15
 METER_VERTICAL_MARGIN: Final[int] = 2
 
 # Fixed constants
@@ -173,7 +173,7 @@ class SliderButtonRenderer:
         else:
             meter_color = self.action._meter_color or COLOR_METER
         
-        ctx.set_antialias(cairo.ANTIALIAS_NONE)
+        ctx.set_antialias(cairo.ANTIALIAS_BEST)
         self._draw_rounded_rect_vertical(ctx, meter_x, meter_y1, meter_width, meter_height, meter_radius, top_end_flat=False)
         set_cairo_color(ctx, meter_color)
         ctx.set_line_width(0)
@@ -185,42 +185,31 @@ class SliderButtonRenderer:
         size = self.button_size
         double_height = size * 2  # Double height is always 2x button size
         
-        # Calculate scale factor based on button size vs base size
-        scale_factor = size / BASE_BUTTON_SIZE
-        
-        # Scale all pixel values
-        corner_inset = int(CORNER_INSET * scale_factor)
-        bar_width = int(BAR_WIDTH * scale_factor)
-        bar_radius = int(BAR_RADIUS * scale_factor)
-        bar_gutter_size = int(BAR_GUTTER_SIZE * scale_factor)
-        meter_width = int(METER_WIDTH * scale_factor)
-        meter_vertical_margin = int(METER_VERTICAL_MARGIN * scale_factor)
-        
-        slider_y = corner_inset + BAR_VERTICAL_OFFSET
-        slider_height = double_height - (corner_inset * 2) - BAR_VERTICAL_OFFSET
-        slider_x = (size - bar_width) // 2 + BAR_HORIZONTAL_OFFSET
+        slider_y = CORNER_INSET + BAR_VERTICAL_OFFSET
+        slider_height = double_height - (CORNER_INSET * 2) - BAR_VERTICAL_OFFSET
+        slider_x = (size - BAR_WIDTH) // 2 + BAR_HORIZONTAL_OFFSET
         
         gutter_x = slider_x
         gutter_y = slider_y
-        gutter_width = bar_width
+        gutter_width = BAR_WIDTH
         gutter_height = slider_height
         gutter_radius = slider_height / RADIUS_DIVISOR
         
         return {
             'button_size': size,
             'double_height': double_height,
-            'slider_width': bar_width,
+            'slider_width': BAR_WIDTH,
             'slider_height': slider_height,
-            'slider_radius': bar_radius,
+            'slider_radius': BAR_RADIUS,
             'slider_x': slider_x,
             'slider_y': slider_y,
             'gutter_x': gutter_x,
             'gutter_y': gutter_y,
-            'gutter_width': gutter_width,
+            'gutter_width': BAR_WIDTH,
             'gutter_height': gutter_height,
             'gutter_radius': gutter_radius,
-            'meter_width': meter_width,
-            'meter_vertical_margin': meter_vertical_margin,
+            'meter_width': METER_WIDTH,
+            'meter_vertical_margin': METER_VERTICAL_MARGIN,
         }
     
     def _render_slider(self) -> Optional[Image.Image]:
@@ -230,9 +219,7 @@ class SliderButtonRenderer:
             size = int(layout['button_size'])
             double_height = int(layout['double_height'])
             
-            scale_factor = 2
-            surface, ctx = create_cairo_surface(size * scale_factor, double_height * scale_factor)
-            ctx.scale(scale_factor, scale_factor)
+            surface, ctx = create_cairo_surface(size, double_height)
             ctx.set_antialias(cairo.ANTIALIAS_BEST)
             
             slider_x = layout['slider_x']
@@ -275,20 +262,25 @@ class SliderButtonRenderer:
                 ctx.fill()
             
             # Add stroke around gutter - 2px for both muted and unmuted
-            stroke_width = 2 * scale_factor
+            stroke_width = 2
             set_cairo_color(ctx, (0, 0, 0, 255))  # Always black
+            ctx.set_antialias(cairo.ANTIALIAS_BEST)
             ctx.set_line_width(stroke_width)
+            ctx.set_line_cap(cairo.LINE_CAP_ROUND)
+            ctx.set_line_join(cairo.LINE_JOIN_ROUND)
+            # Draw border on outside of gutter
             self._draw_rounded_rect_vertical(ctx, gutter_x, gutter_y, 
                                             gutter_width, gutter_height, 
                                             gutter_radius)
             ctx.stroke()
+            ctx.set_antialias(cairo.ANTIALIAS_DEFAULT)
             
             meter_value = self.action._current_meter_a if is_source else self.action._current_meter_target
             if self.action._meters_enabled and meter_value > 0 and effective_fill_height > 0 and fill_color:
-                # Center meter horizontally within slider
-                meter_x = int(slider_x + (slider_width - layout['meter_width']) // 2)
+                # Center meter horizontally within slider (draw meter from left edge)
+                meter_x = slider_x + (slider_width - layout['meter_width']) // 2
                 # Position meter further away from bottom with more padding
-                meter_y_offset = int(layout['meter_vertical_margin'] * 4)  # More padding from bottom
+                meter_y_offset = int(layout['meter_vertical_margin'] * 4) + 1  # More padding from bottom
                 meter_start_y = slider_fill_y + meter_y_offset
                 meter_available_height = int(effective_fill_height) - meter_y_offset - layout['meter_vertical_margin']
                 
@@ -301,7 +293,6 @@ class SliderButtonRenderer:
                     )
             
             full_image = cairo_to_pil(surface)
-            full_image = full_image.resize((size, double_height), Image.Resampling.LANCZOS)
             
             # Crop the appropriate portion
             if self.is_top:
