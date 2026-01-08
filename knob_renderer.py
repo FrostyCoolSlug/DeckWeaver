@@ -26,7 +26,7 @@ CORNER_INSET: Final[int] = 14
 
 ICON_MAX_SIZE: Final[int] = 52
 
-BAR_HEIGHT: Final[int] = 12
+BAR_HEIGHT: Final[int] = 14
 BAR_RADIUS: Final[int] = 3
 BAR_GUTTER_SIZE: Final[int] = 4
 BAR_HORIZONTAL_OFFSET: Final[int] = 0
