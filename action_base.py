@@ -118,8 +118,26 @@ class PipeWeaverAction(ActionBase):
     
     def _load_settings(self) -> None:
         settings = self.get_settings()
-        if self.devices:
+        
+        # Load device_id from settings early so we know which device to select
+        # once devices are loaded (allows async loading to work properly)
+        saved_device_id = settings.get('device_id')
+        if saved_device_id and not self.selected_device_id:
+            self.selected_device_id = saved_device_id
+        
+        # Only load full device settings if devices are available
+        if self.devices and not self.selected_device_name:
             self._load_device_settings(settings)
+        elif self.devices and self.selected_device_id:
+            # Verify the currently selected device still exists
+            device = next((d for d in self.devices if d['id'] == self.selected_device_id), None)
+            if not device:
+                # Selected device no longer exists, try to load from settings
+                self._load_device_settings(settings)
+            elif not self.selected_device_name:
+                # Device exists but name not set yet
+                self.selected_device_name = device['name']
+                self.selected_device_type = device['type']
         
         self.volume_step = settings.get('volume_step', DEFAULT_VOLUME_STEP)
         self.orientation = settings.get('orientation', 'vertical')
@@ -147,14 +165,20 @@ class PipeWeaverAction(ActionBase):
         if not self.devices and self.client.connected:
             self.devices = self._load_devices()
     
-    def _load_devices_async(self) -> None:
+    def _load_devices_async(self, retry_count: int = 0) -> None:
         """Load devices asynchronously without blocking"""
         if self._is_loading_devices:
             return
         
+        MAX_RETRIES = 5
+        RETRY_DELAY = 500  # ms
+        
         def do_load() -> bool:
             try:
                 if not is_service_available():
+                    # Retry later if service not available yet
+                    if retry_count < MAX_RETRIES:
+                        GLib.timeout_add(RETRY_DELAY, lambda: self._load_devices_async(retry_count + 1) or False)
                     return False
                 
                 if not self.client.connected:
@@ -169,7 +193,34 @@ class PipeWeaverAction(ActionBase):
                 
                 if self.devices:
                     settings = self.get_settings()
-                    self._load_device_settings(settings)
+                    # Load device settings if we don't have a complete device selection
+                    # (either no ID or no name - the name is needed for rendering)
+                    if not self.selected_device_id or not self.selected_device_name:
+                        self._load_device_settings(settings)
+                    else:
+                        # Verify the currently selected device still exists
+                        device = next((d for d in self.devices if d['id'] == self.selected_device_id), None)
+                        if not device:
+                            # Selected device no longer exists, try to load from settings
+                            self._load_device_settings(settings)
+                        else:
+                            # Device exists, make sure we have the name and type
+                            if not self.selected_device_name:
+                                self.selected_device_name = device['name']
+                                self.selected_device_type = device['type']
+                                self._update_device_from_api()
+                    
+                    # Update the device list UI if it's already open
+                    if hasattr(self, 'device_container') and self.device_container is not None:
+                        # Check if container has any children (UI is populated)
+                        if self.device_container.get_first_child() is not None:
+                            self._populate_device_list()
+                else:
+                    # No devices available yet, retry a few times
+                    if retry_count < MAX_RETRIES:
+                        self._is_loading_devices = False
+                        GLib.timeout_add(RETRY_DELAY, lambda: self._load_devices_async(retry_count + 1) or False)
+                        return False
                 
                 self._is_loading_devices = False
                 self._last_draw_state = None
@@ -195,7 +246,9 @@ class PipeWeaverAction(ActionBase):
                 self._set_selected_device(device, settings, saved_device_id)
                 return
         
-        if self.devices:
+        # Only auto-select first device if no device is currently selected
+        # This prevents resetting a manually selected device
+        if self.devices and not self.selected_device_id:
             self._set_selected_device(self.devices[0], settings)
     
     def _update_device_from_api(self, status_data: Optional[dict[str, Any]] = None) -> None:
@@ -307,6 +360,7 @@ class PipeWeaverAction(ActionBase):
         
         self._ensure_connection_and_load_devices()
         
+        # Load settings first, but don't auto-select device if one is already selected
         self._load_settings()
         
         # Create an ExpanderRow for the device selector
@@ -330,6 +384,11 @@ class PipeWeaverAction(ActionBase):
         
         self.device_expander.add_row(scrolled)
         self.device_selector = self.device_expander  # Keep reference for compatibility
+        
+        # Reload devices when expander is opened
+        self.device_expander.connect("notify::expanded", self._on_device_expander_expanded)
+        
+        # Populate device list - this will preserve current selection if devices exist
         self._populate_device_list()
         
         refresh_button = Gtk.Button(
@@ -531,6 +590,28 @@ class PipeWeaverAction(ActionBase):
             self.selected_device_type = device_type_filter
         else:
             self.devices = all_devices
+        
+        # Preserve current selection when refreshing
+        # If selected device no longer exists, try to load from settings
+        if self.selected_device_id and self.devices:
+            current_device = next((d for d in self.devices if d['id'] == self.selected_device_id), None)
+            if not current_device:
+                # Selected device no longer exists, try to restore from settings
+                # Clear the selection so _load_device_settings can handle it
+                self.selected_device_id = None
+                self.selected_device_name = None
+                settings = self.get_settings()
+                self._load_device_settings(settings)
+            else:
+                # Current device still exists, update its name in case it changed
+                if current_device['name'] != self.selected_device_name:
+                    self.selected_device_name = current_device['name']
+                    if hasattr(self, 'device_expander'):
+                        self.device_expander.set_subtitle(self.selected_device_name)
+        elif not self.selected_device_id and self.devices:
+            # No device currently selected, try to load from settings or auto-select first
+            settings = self.get_settings()
+            self._load_device_settings(settings)
         
         if hasattr(self, 'device_expander'):
             self.device_expander.set_subtitle(self.selected_device_name or "No device selected")
@@ -744,6 +825,18 @@ class PipeWeaverAction(ActionBase):
             self._populate_device_list()
         except Exception as e:
             log.error(f"Error refreshing devices: {e}")
+    
+    def _on_device_expander_expanded(self, expander: Adw.ExpanderRow, param: Any) -> None:
+        """Handle expander expanded/collapsed - reload devices when opened"""
+        if expander.get_expanded():
+            # Expander was opened, reload devices
+            try:
+                # Ensure connection is established and devices are loaded
+                self._ensure_connection_and_load_devices()
+                # Reload and populate the device list (this will reload from API)
+                self._populate_device_list()
+            except Exception as e:
+                log.error(f"Error loading devices when expander opened: {e}")
     
     def on_settings_changed(self, settings: dict[str, Any]) -> None:
         device_id = settings.get('device_id')

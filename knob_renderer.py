@@ -61,16 +61,13 @@ class KnobRenderer:
                 log.error(f"Error rendering service unavailable state: {e}")
             return
         
-        if getattr(self.action, '_is_loading_devices', False):
+        if getattr(self.action, '_is_loading_devices', False) or not self.action.selected_device_name:
             try:
                 image = render_loading_full(self.screen_width, self.screen_height)
                 if image:
                     set_image_on_action(self.action, image)
             except Exception as e:
                 log.error(f"Error rendering loading state: {e}")
-            return
-        
-        if not self.action.selected_device_name:
             return
         
         try:
