@@ -5,6 +5,7 @@
     
     "settings.language.label": "Langue",
     "settings.language.auto": "Détection automatique",
+    "settings.version.label": "Version",
     
     "settings.language.name.auto": "Détection automatique",
     "settings.language.name.en_US": "English (US)",

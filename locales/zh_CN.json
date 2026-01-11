@@ -5,6 +5,7 @@
     
     "settings.language.label": "语言",
     "settings.language.auto": "自动检测",
+    "settings.version.label": "版本",
     
     "settings.language.name.auto": "自动检测",
     "settings.language.name.en_US": "English (US)",

@@ -18,11 +18,13 @@ from .volume_up_button_action import PipeWeaverVolumeUpButtonAction
 from .volume_down_button_action import PipeWeaverVolumeDownButtonAction
 from .slider_action import PipeWeaverSliderAction
 from .service_monitor import start_monitor, stop_monitor
+from .version import VERSION
 
 
 class DeckWeaver(PluginBase):
     def __init__(self):
         super().__init__()
+        log.info(f"DeckWeaver {VERSION} initializing")
         self.lm = self.locale_manager
         self.load_and_apply_settings()
         self.load_devices()
@@ -56,7 +58,7 @@ class DeckWeaver(PluginBase):
         self.register(
             plugin_name=self.lm.get("plugin.name"),
             github_repo="https://github.com/designgears/DeckWeaver",
-            plugin_version="1.0.0",
+            plugin_version=VERSION,
             app_version="1.5.0-beta"
         )
     
@@ -170,8 +172,16 @@ class DeckWeaver(PluginBase):
         
         self.language_dropdown.connect("notify::selected", self.on_language_changed)
         
+        # Version info row
+        version_row = Adw.ActionRow(
+            title=self.lm.get("settings.version.label"),
+            subtitle=VERSION
+        )
+        version_row.set_activatable(False)
+        
         group = Adw.PreferencesGroup()
         group.add(self.language_dropdown)
+        group.add(version_row)
         return group
     
     def on_language_changed(self, combo: Adw.ComboRow, data: Any) -> None:
