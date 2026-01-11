@@ -16,6 +16,10 @@
     
     "actions.knob.name": "Perilla PipeWeaver",
     "actions.knob.tooltip": "Controla el audio de PipeWeaver con la perilla/dial",
+    "actions.button.name": "Botón PipeWeaver",
+    "actions.button.tooltip": "Controla el audio de PipeWeaver con botón",
+    "actions.slider.name": "Deslizador PipeWeaver",
+    "actions.slider.tooltip": "Controla el audio de PipeWeaver con deslizador",
     
     "ui.error.not_running.title": "PipeWeaver No Está Ejecutándose",
     "ui.error.not_running.subtitle": "Por favor inicia el demonio de PipeWeaver para configurar esta acción",

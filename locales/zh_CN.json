@@ -16,6 +16,10 @@
     
     "actions.knob.name": "PipeWeaver 旋钮",
     "actions.knob.tooltip": "使用旋钮/拨盘控制 PipeWeaver 音频",
+    "actions.button.name": "PipeWeaver 按钮",
+    "actions.button.tooltip": "使用按钮控制 PipeWeaver 音频",
+    "actions.slider.name": "PipeWeaver 滑块",
+    "actions.slider.tooltip": "使用滑块控制 PipeWeaver 音频",
     
     "ui.error.not_running.title": "PipeWeaver 未运行",
     "ui.error.not_running.subtitle": "请启动 PipeWeaver 守护进程以配置此操作",

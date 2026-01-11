@@ -4,62 +4,69 @@
         "original-url": "https://github.com/pipeweaver/pipeweaver",
         "license": "MIT",
         "license-url": "https://opensource.org/licenses/MIT",
-        "description": "PipeWeaver StreamController Plugin"
+        "description": "PipeWeaver virtual audio routing daemon (controlled via API)"
     },
-    "websocket": {
-        "copyright": "liris, engn33r",
-        "original-url": "https://github.com/websocket-client/websocket-client",
-        "license": "Apache-2.0",
+    "pyo3": {
+        "copyright": "PyO3 Project Contributors",
+        "original-url": "https://github.com/pyo3/pyo3",
+        "license": "Apache-2.0 OR MIT",
         "license-url": "https://opensource.org/licenses/Apache-2.0",
-        "description": "WebSocket client for Python"
+        "description": "Rust bindings for the Python interpreter"
     },
-    "numpy": {
-        "copyright": "NumPy Developers",
-        "original-url": "https://github.com/numpy/numpy",
-        "license": "BSD-3-Clause",
-        "license-url": "https://opensource.org/licenses/BSD-3-Clause",
-        "description": "NumPy numerical computing library"
-    },
-    "skia": {
-        "copyright": "Kota Yamaguchi",
-        "original-url": "https://github.com/kyamagu/skia-python",
-        "license": "BSD-3-Clause",
-        "license-url": "https://opensource.org/licenses/BSD-3-Clause",
-        "description": "Skia graphics library Python bindings"
-    },
-    "pybind11": {
-        "copyright": "Wenzel Jakob",
-        "original-url": "https://github.com/pybind/pybind11",
-        "license": "BSD-3-Clause",
-        "license-url": "https://opensource.org/licenses/BSD-3-Clause",
-        "description": "Seamless operability between C++11 and Python"
-    },
-    "fonts": {
-        "copyright": "DejaVu Fonts Team; Google Fonts",
-        "original-url": "https://dejavu-fonts.github.io; https://fonts.google.com/noto",
-        "license": "MIT; SIL Open Font License",
-        "license-url": "https://opensource.org/licenses/MIT; https://scripts.sil.org/OFL",
-        "description": "DejaVu Sans and Noto Color Emoji fonts"
-    },
-    "fontconfig": {
-        "copyright": "Fontconfig Authors",
-        "original-url": "https://gitlab.freedesktop.org/fontconfig/fontconfig",
+    "tokio": {
+        "copyright": "Tokio Contributors",
+        "original-url": "https://github.com/tokio-rs/tokio",
         "license": "MIT",
         "license-url": "https://opensource.org/licenses/MIT",
-        "description": "Font configuration and customization library"
+        "description": "Async runtime for Rust"
     },
-    "freetype": {
-        "copyright": "FreeType Project",
-        "original-url": "https://freetype.org",
-        "license": "FreeType License",
-        "license-url": "https://freetype.org/license.html",
-        "description": "Font rasterization engine"
+    "tokio-tungstenite": {
+        "copyright": "Alexey Galakhov, Daniel Abramov",
+        "original-url": "https://github.com/snapview/tokio-tungstenite",
+        "license": "MIT",
+        "license-url": "https://opensource.org/licenses/MIT",
+        "description": "WebSocket client implementation for Tokio"
     },
-    "libpng": {
-        "copyright": "PNG Development Group",
-        "original-url": "http://www.libpng.org",
-        "license": "libpng License",
-        "license-url": "http://www.libpng.org/pub/png/src/libpng-LICENSE.txt",
-        "description": "PNG reference library"
+    "serde": {
+        "copyright": "Erick Tryzelaar, David Tolnay",
+        "original-url": "https://github.com/serde-rs/serde",
+        "license": "MIT OR Apache-2.0",
+        "license-url": "https://opensource.org/licenses/MIT",
+        "description": "Serialization framework for Rust"
+    },
+    "tiny-skia": {
+        "copyright": "RazrFalcon",
+        "original-url": "https://github.com/RazrFalcon/tiny-skia",
+        "license": "MIT",
+        "license-url": "https://opensource.org/licenses/MIT",
+        "description": "Tiny Skia 2D graphics library"
+    },
+    "resvg": {
+        "copyright": "Yevhenii Reizner",
+        "original-url": "https://github.com/RazrFalcon/resvg",
+        "license": "MPL-2.0",
+        "license-url": "https://opensource.org/licenses/MPL-2.0",
+        "description": "SVG rendering library"
+    },
+    "image": {
+        "copyright": "The image-rs Developers",
+        "original-url": "https://github.com/image-rs/image",
+        "license": "MIT",
+        "license-url": "https://opensource.org/licenses/MIT",
+        "description": "Image processing library for Rust"
+    },
+    "parking_lot": {
+        "copyright": "Amanieu d'Antras",
+        "original-url": "https://github.com/Amanieu/parking_lot",
+        "license": "Apache-2.0 OR MIT",
+        "license-url": "https://opensource.org/licenses/Apache-2.0",
+        "description": "Fast and compact synchronization primitives"
+    },
+    "tracing": {
+        "copyright": "Tokio Contributors",
+        "original-url": "https://github.com/tokio-rs/tracing",
+        "license": "MIT",
+        "license-url": "https://opensource.org/licenses/MIT",
+        "description": "Structured, event-based diagnostic logging framework"
     }
 }

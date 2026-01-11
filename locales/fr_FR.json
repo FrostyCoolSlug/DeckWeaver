@@ -16,6 +16,10 @@
     
     "actions.knob.name": "Molette PipeWeaver",
     "actions.knob.tooltip": "Contrôlez l'audio PipeWeaver avec la molette/dial",
+    "actions.button.name": "Bouton PipeWeaver",
+    "actions.button.tooltip": "Contrôlez l'audio PipeWeaver avec bouton",
+    "actions.slider.name": "Curseur PipeWeaver",
+    "actions.slider.tooltip": "Contrôlez l'audio PipeWeaver avec curseur",
     
     "ui.error.not_running.title": "PipeWeaver N'est Pas En Cours",
     "ui.error.not_running.subtitle": "Veuillez démarrer le démon PipeWeaver pour configurer cette action",

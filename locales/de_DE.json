@@ -16,6 +16,10 @@
     
     "actions.knob.name": "PipeWeaver Knopf",
     "actions.knob.tooltip": "PipeWeaver Audio mit Knopf/Dial steuern",
+    "actions.button.name": "PipeWeaver Taste",
+    "actions.button.tooltip": "PipeWeaver Audio mit Taste steuern",
+    "actions.slider.name": "PipeWeaver Schieberegler",
+    "actions.slider.tooltip": "PipeWeaver Audio mit Schieberegler steuern",
     
     "ui.error.not_running.title": "PipeWeaver Läuft Nicht",
     "ui.error.not_running.subtitle": "Bitte starten Sie den PipeWeaver Daemon um diese Aktion zu konfigurieren",
