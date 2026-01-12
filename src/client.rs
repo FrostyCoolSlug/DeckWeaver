@@ -1,7 +1,7 @@
 //! WebSocket client for communicating with PipeWeaver daemon
 
 use crate::devices::{Device, DeviceType, Status};
-use futures_util::{SinkExt, StreamExt};
+use futures_util::StreamExt;
 use parking_lot::RwLock;
 use pyo3::prelude::*;
 use pyo3::types::PyAny;
@@ -309,8 +309,17 @@ async fn run_client_loop(
             id: initial_id,
             data: serde_json::json!("GetStatus"),
         };
-        if let Ok(json) = serde_json::to_string(&initial_request) {
-            let _ = write.send(Message::Text(json.into())).await;
+        match serde_json::to_string(&initial_request) {
+            Ok(json) => {
+                use futures_util::SinkExt;
+                if let Err(e) = write.send(Message::Text(json.into())).await {
+                    tracing::error!("Failed to send initial status request: {}", e);
+                    break;
+                }
+            }
+            Err(e) => {
+                tracing::error!("Failed to serialize initial status request: {}", e);
+            }
         }
 
         // Process messages until disconnection
@@ -348,9 +357,16 @@ async fn run_client_loop(
 
                             pending_requests.write().insert(id, response_tx);
 
-                            if let Ok(json) = serde_json::to_string(&request) {
-                                if write.send(Message::Text(json.into())).await.is_err() {
-                                    break;
+                            match serde_json::to_string(&request) {
+                                Ok(json) => {
+                                    use futures_util::SinkExt;
+                                    if let Err(e) = write.send(Message::Text(json.into())).await {
+                                        tracing::error!("Failed to send request: {}", e);
+                                        break;
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::error!("Failed to serialize request: {}", e);
                                 }
                             }
                         }
@@ -392,7 +408,13 @@ fn handle_message(
     callbacks: &Arc<RwLock<Vec<Py<PyAny>>>>,
     pending_requests: &PendingRequests,
 ) {
-    let Ok(response) = serde_json::from_str::<Response>(text) else { return };
+    let response = match serde_json::from_str::<Response>(text) {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!("Failed to parse WebSocket message as JSON: {} (message: {})", e, text.chars().take(200).collect::<String>());
+            return;
+        }
+    };
 
     // Patch updates
     if let Some(patch) = response.data.get("Patch").and_then(|p| p.as_array()) {
@@ -403,9 +425,14 @@ fn handle_message(
 
     // Status response
     if let Some(status_data) = response.data.get("Status") {
-        if let Ok(new_status) = serde_json::from_value::<Status>(status_data.clone()) {
-            *status.write() = Some(new_status);
-            notify_callbacks(callbacks, status);
+        match serde_json::from_value::<Status>(status_data.clone()) {
+            Ok(new_status) => {
+                *status.write() = Some(new_status);
+                notify_callbacks(callbacks, status);
+            }
+            Err(e) => {
+                tracing::warn!("Failed to deserialize Status: {}", e);
+            }
         }
     }
 
@@ -419,12 +446,17 @@ fn handle_message(
 fn apply_patch(status: &Arc<RwLock<Option<Status>>>, patch: &[Value]) {
     let mut status_guard = status.write();
     let Some(status) = status_guard.as_mut() else {
+        tracing::warn!("Cannot apply patch: status is None");
         return;
     };
 
     // Convert status to Value, apply patches, convert back
-    let Ok(mut value) = serde_json::to_value(&*status) else {
-        return;
+    let mut value = match serde_json::to_value(&*status) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!("Failed to serialize status for patch: {}", e);
+            return;
+        }
     };
 
     for op in patch {
@@ -433,8 +465,13 @@ fn apply_patch(status: &Arc<RwLock<Option<Status>>>, patch: &[Value]) {
         }
     }
 
-    if let Ok(new_status) = serde_json::from_value::<Status>(value) {
-        *status = new_status;
+    match serde_json::from_value::<Status>(value) {
+        Ok(new_status) => {
+            *status = new_status;
+        }
+        Err(e) => {
+            tracing::error!("Failed to deserialize status after patch: {}", e);
+        }
     }
 }
 

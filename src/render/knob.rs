@@ -143,7 +143,8 @@ impl KnobRenderer {
 
         // Mute indicator
         if params.is_muted {
-            draw_diagonal_line(&mut pixmap, icon_x, icon_y + ICON_MAX_SIZE, icon_x + ICON_MAX_SIZE, icon_y, 6.0, COLOR_RED);
+            // Flipped: from top-left to bottom-right
+            draw_diagonal_line(&mut pixmap, icon_x, icon_y, icon_x + ICON_MAX_SIZE, icon_y + ICON_MAX_SIZE, 6.0, COLOR_RED);
         }
 
         Some(pixmap)

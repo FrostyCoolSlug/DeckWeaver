@@ -155,10 +155,10 @@ impl SliderRenderer {
             result.data_mut()[dst..dst + row_bytes].copy_from_slice(&full.data()[src..src + row_bytes]);
         }
 
-        if is_horizontal { self.rotate_ccw(&result) } else { Some(result) }
+        if is_horizontal { self.rotate_cw(&result) } else { Some(result) }
     }
 
-    fn rotate_ccw(&self, pixmap: &Pixmap) -> Option<Pixmap> {
+    fn rotate_cw(&self, pixmap: &Pixmap) -> Option<Pixmap> {
         let (w, h) = (pixmap.width(), pixmap.height());
         let mut rotated = Pixmap::new(h, w)?;
         let (src, dst) = (pixmap.data(), rotated.data_mut());
@@ -166,7 +166,7 @@ impl SliderRenderer {
         for y in 0..h {
             for x in 0..w {
                 let si = ((y * w + x) * 4) as usize;
-                let di = (((w - 1 - x) * h + y) * 4) as usize;
+                let di = ((x * h + (h - 1 - y)) * 4) as usize;
                 dst[di..di + 4].copy_from_slice(&src[si..si + 4]);
             }
         }

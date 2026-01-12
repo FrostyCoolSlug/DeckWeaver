@@ -92,8 +92,7 @@ impl MeterClient {
                                                 let now = Instant::now();
                                                 let should_notify = last_updates
                                                     .get(&meter.id)
-                                                    .map(|t| now.duration_since(*t) >= METER_THROTTLE)
-                                                    .unwrap_or(true);
+                                                    .map_or(true, |t| now.duration_since(*t) >= METER_THROTTLE);
                                                 if should_notify {
                                                     last_updates.insert(meter.id.clone(), now);
                                                     notify_meter_callbacks(&callbacks, &meter.id, meter.percent);

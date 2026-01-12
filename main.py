@@ -37,23 +37,60 @@ from .deckweaver import (
 
 # Single shared core instance
 _core: Optional[DeckWeaverCore] = None
+_poll_timeout_id: Optional[int] = None
+_action_callbacks: dict[str, tuple[Any, Any]] = {}  # action_id -> (image_callback, label_callback)
+
+
+def _poll_updates() -> bool:
+    """Poll for pending updates from Rust core and process them"""
+    global _core, _action_callbacks
+    if _core is None:
+        return True  # Continue polling
+    
+    try:
+        updates = _core.get_pending_updates()
+        for action_id, update_dict in updates.items():
+            image_cb, label_cb = _action_callbacks.get(action_id, (None, None))
+            
+            # Process image update
+            if image_cb is not None and "image" in update_dict:
+                image_data = update_dict["image"]
+                if image_data is not None:
+                    image_cb(image_data)
+            
+            # Process label update
+            if label_cb is not None and "label" in update_dict:
+                label_data = update_dict["label"]
+                if label_data is not None:
+                    label_cb(label_data)
+    except Exception as e:
+        log.error(f"Error polling updates: {e}")
+    
+    return True  # Continue polling
 
 
 def _get_core() -> DeckWeaverCore:
     """Get or create the shared core instance"""
-    global _core
+    global _core, _poll_timeout_id
     if _core is None:
         _core = DeckWeaverCore()
         _core.start()
+        # Start polling timer (~60fps = ~16ms interval)
+        if _poll_timeout_id is None:
+            _poll_timeout_id = GLib.timeout_add(16, _poll_updates)
     return _core
 
 
 def _release_core():
     """Stop and release the core"""
-    global _core
+    global _core, _poll_timeout_id, _action_callbacks
+    if _poll_timeout_id is not None:
+        GLib.source_remove(_poll_timeout_id)
+        _poll_timeout_id = None
     if _core is not None:
         _core.stop()
         _core = None
+    _action_callbacks.clear()
 
 
 class DeckWeaver(PluginBase):
@@ -296,17 +333,17 @@ class BaseAction(ActionBase):
 
     def _register_with_core(self):
         """Register this action with the Rust core"""
+        global _action_callbacks
         self._load_settings()
         config = self._build_config()
         self._core.register_action(config)
-        # Register our callbacks for this action
-        self._core.add_image_callback(self._action_id, self._on_image_update)
-        self._core.add_label_callback(self._action_id, self._on_label_update)
+        # Store callbacks locally for polling mechanism
+        _action_callbacks[self._action_id] = (self._on_image_update, self._on_label_update)
 
     def _unregister_from_core(self):
         """Unregister this action from the Rust core"""
-        self._core.remove_image_callback(self._action_id)
-        self._core.remove_label_callback(self._action_id)
+        global _action_callbacks
+        _action_callbacks.pop(self._action_id, None)
         self._core.unregister_action(self._action_id)
 
     def _update_config(self):
@@ -315,7 +352,7 @@ class BaseAction(ActionBase):
         self._core.update_action(self._action_id, config)
 
     def _on_image_update(self, png_bytes: bytes):
-        """Called from Rust when a new image is ready for this action"""
+        """Called when a new image is ready for this action (from polling)"""
         def update():
             try:
                 image = Image.open(BytesIO(png_bytes))
@@ -328,7 +365,7 @@ class BaseAction(ActionBase):
         GLib.idle_add(update)
 
     def _on_label_update(self, label: str):
-        """Called from Rust when the device name changes"""
+        """Called when the device name changes (from polling)"""
         def update():
             self._set_label(label[:25] if label else "")
         GLib.idle_add(update)
@@ -434,10 +471,22 @@ class BaseAction(ActionBase):
         self.icon_row = icon_row
 
         # Volume Step Row
-        self.volume_step_row = Adw.SpinRow.new_with_range(self.MIN_VOLUME_STEP, self.MAX_VOLUME_STEP, 1)
+        # For ButtonAction and SliderAction, use signed range (-20 to 20)
+        # For KnobAction, use positive range (5 to 20)
+        class_name = self.__class__.__name__
+        if class_name == "ButtonAction" or class_name == "SliderAction":
+            self.volume_step_row = Adw.SpinRow.new_with_range(-20, 20, 1)
+            self.volume_step_row.set_value(self._volume_step)
+            if class_name == "ButtonAction":
+                self.volume_step_row.set_subtitle("Positive = vol up, Negative = vol down, Zero = mute toggle")
+            else:
+                self.volume_step_row.set_subtitle("Positive = top slider, Negative = bottom")
+        else:
+            # KnobAction
+            self.volume_step_row = Adw.SpinRow.new_with_range(5, self.MAX_VOLUME_STEP, 1)
+            self.volume_step_row.set_value(abs(self._volume_step))
+            self.volume_step_row.set_subtitle(lm.get("ui.volume_step.subtitle"))
         self.volume_step_row.set_title(lm.get("ui.volume_step.title"))
-        self.volume_step_row.set_subtitle(lm.get("ui.volume_step.subtitle"))
-        self.volume_step_row.set_value(abs(self._volume_step))
         self.volume_step_row.connect("notify::value", self._on_volume_step_changed)
 
         # Meters Enabled Row
@@ -495,14 +544,22 @@ class BaseAction(ActionBase):
         
         volume_bar_color_row.add_suffix(volume_bar_color_box)
         
-        return [
+        rows = [
             self.device_expander,
             icon_row,
             self.volume_step_row,
-            meters_enabled_row,
-            meter_color_row,
-            volume_bar_color_row
         ]
+        
+        # Only add meter and volume bar settings for KnobAction and SliderAction (not ButtonAction)
+        class_name = self.__class__.__name__
+        if class_name != "ButtonAction":
+            rows.extend([
+                meters_enabled_row,
+                meter_color_row,
+                volume_bar_color_row,
+            ])
+        
+        return rows
 
     def _populate_device_list(self, retry_count: int = 0):
         """Populate the device list in the expander"""
@@ -660,15 +717,14 @@ class BaseAction(ActionBase):
 
     def _on_volume_step_changed(self, spin_row: Adw.SpinRow, _):
         value = int(spin_row.get_value())
-        # For ButtonAction and SliderAction, use signed value directly
-        # For other actions (KnobAction), preserve sign if negative
-        if self.ACTION_TYPE in (ActionType.button(), ActionType.slider()):
-            self._volume_step = value
-        elif self._volume_step < 0:
-            value = -value
+        # For ButtonAction and SliderAction, use signed value directly (preserve negative)
+        # For KnobAction, always use positive (absolute value)
+        class_name = self.__class__.__name__
+        if class_name == "ButtonAction" or class_name == "SliderAction":
             self._volume_step = value
         else:
-            self._volume_step = value
+            # KnobAction: always positive
+            self._volume_step = abs(value)
         
         settings = self.get_settings()
         settings["volume_step"] = self._volume_step
@@ -772,31 +828,21 @@ class KnobAction(BaseAction):
 
 
 class ButtonAction(BaseAction):
-    """Volume button (positive step = up, negative step = down)"""
+    """Volume button (positive step = up, negative step = down, zero = mute)"""
 
     ACTION_TYPE = ActionType.button()
 
     def get_config_rows(self):
-        rows = super().get_config_rows()
-        
-        # Replace volume step with signed version for button
-        if hasattr(self, 'volume_step_row'):
-            for i, row in enumerate(rows):
-                if row == self.volume_step_row:
-                    new_row = Adw.SpinRow.new_with_range(-20, 20, 1)
-                    new_row.set_title(self.plugin_base.lm.get("ui.volume_step.title"))
-                    new_row.set_subtitle("Positive = volume up, Negative = volume down")
-                    new_row.set_value(self._volume_step)
-                    new_row.connect("notify::value", self._on_volume_step_changed)
-                    rows[i] = new_row
-                    self.volume_step_row = new_row
-                    break
-        
-        return rows
+        # Base class already excludes meter settings for ButtonAction
+        return super().get_config_rows()
 
     def event_callback(self, event: Any, data: Any):
         if "Short Up" in str(event) and self._device_id:
-            self._core.set_volume_relative(self._device_id, self._volume_step)
+            if self._volume_step == 0:
+                # Mute button
+                self._core.toggle_mute(self._device_id)
+            else:
+                self._core.set_volume_relative(self._device_id, self._volume_step)
 
 
 class SliderAction(BaseAction):
@@ -812,20 +858,8 @@ class SliderAction(BaseAction):
         return config
 
     def get_config_rows(self):
+        # Base class already creates the correct row for SliderAction
         rows = super().get_config_rows()
-
-        # Replace volume step with signed version for slider
-        if hasattr(self, 'volume_step_row'):
-            for i, row in enumerate(rows):
-                if row == self.volume_step_row:
-                    new_row = Adw.SpinRow.new_with_range(-20, 20, 1)
-                    new_row.set_title(self.plugin_base.lm.get("ui.volume_step.title"))
-                    new_row.set_subtitle("Positive = top slider, Negative = bottom")
-                    new_row.set_value(self._volume_step)
-                    new_row.connect("notify::value", self._on_volume_step_changed)
-                    rows[i] = new_row
-                    self.volume_step_row = new_row
-                    break
 
         # Orientation selector
         lm = self.plugin_base.lm

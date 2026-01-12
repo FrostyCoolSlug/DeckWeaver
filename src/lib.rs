@@ -13,6 +13,7 @@ mod monitor;
 mod render;
 
 use pyo3::prelude::*;
+use pyo3::types::PyModule;
 
 pub use action::{ActionConfig, ActionType};
 pub use client::PipeWeaverClient;
@@ -26,9 +27,6 @@ pub use render::{ButtonRenderer, KnobRenderer, SliderRenderer};
 /// Initialize the deckweaver Python module
 #[pymodule]
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    // Bridge Rust logging to Python's logging module
-    // This makes tracing::info!, tracing::warn!, tracing::error! etc.
-    // appear in StreamController's console
     pyo3_log::init();
 
     // Core manager (new unified API)

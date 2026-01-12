@@ -113,7 +113,10 @@ impl Drop for ServiceMonitor {
 
 fn check_service(host: &str, port: u16) -> bool {
     let addr = format!("{}:{}", host, port);
-    TcpStream::connect_timeout(&addr.parse().expect("Invalid address"), CONNECTION_TIMEOUT).is_ok()
+    addr.parse()
+        .ok()
+        .and_then(|addr| TcpStream::connect_timeout(&addr, CONNECTION_TIMEOUT).ok())
+        .is_some()
 }
 
 fn notify_callbacks(callbacks: &Arc<RwLock<Vec<Py<PyAny>>>>, available: bool) {
