@@ -836,6 +836,25 @@ class ButtonAction(BaseAction):
         # Base class already excludes meter settings for ButtonAction
         return super().get_config_rows()
 
+    def _build_config(self) -> ActionConfig:
+        config = super()._build_config()
+        
+        # If no custom icon is set, use the default audio-lines.svg icon
+        if not config.icon_png:
+            # Get the plugin directory (where main.py is located)
+            plugin_dir = os.path.dirname(os.path.abspath(__file__))
+            default_icon_path = os.path.join(plugin_dir, "assets", "icons", "audio-lines.svg")
+            
+            if os.path.exists(default_icon_path):
+                try:
+                    icon_data = self._load_icon_as_png(default_icon_path)
+                    if icon_data:
+                        config.icon_png = icon_data
+                except Exception as e:
+                    log.error(f"Error loading default icon: {e}")
+        
+        return config
+
     def event_callback(self, event: Any, data: Any):
         if "Short Up" in str(event) and self._device_id:
             if self._volume_step == 0:

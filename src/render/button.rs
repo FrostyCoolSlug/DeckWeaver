@@ -131,17 +131,15 @@ impl ButtonRenderer {
                     let corner_offset = corner_sym * 0.35;
                     draw_diagonal_line(&mut pixmap, corner_cx + corner_offset, corner_cy - corner_offset, corner_cx - corner_offset, corner_cy + corner_offset, corner_width, COLOR_WHITE);
                 } else {
-                    // No icon: red slash when muted, white when unmuted
-                    let sym_size = size * LARGE_SYMBOL_RATIO;
-                    let line_width = if is_muted { 6.0 } else { (size * LARGE_LINE_WIDTH_RATIO).max(3.0) };
-                    let offset = sym_size * 0.35;
-                    let slash_color = if is_muted { COLOR_RED } else { COLOR_WHITE };
-                    // Flipped: from top-left to bottom-right (for red), top-right to bottom-left (for white)
+                    // No custom icon: red slash when muted only (default icon is always shown)
                     if is_muted {
-                        draw_diagonal_line(&mut pixmap, center - offset, center - offset, center + offset, center + offset, line_width, slash_color);
-                    } else {
-                        draw_diagonal_line(&mut pixmap, center + offset, center - offset, center - offset, center + offset, line_width, slash_color);
+                        let sym_size = size * LARGE_SYMBOL_RATIO;
+                        let line_width = 6.0;
+                        let offset = sym_size * 0.35;
+                        // Flipped: from top-left to bottom-right
+                        draw_diagonal_line(&mut pixmap, center - offset, center - offset, center + offset, center + offset, line_width, COLOR_RED);
                     }
+                    // When unmuted, just show the default icon (no slash needed)
                 }
             }
         }
