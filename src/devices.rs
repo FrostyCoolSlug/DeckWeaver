@@ -2,7 +2,7 @@
 
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 /// Device type identifier
 #[pyclass]
@@ -188,7 +188,7 @@ pub struct ColorData {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct VolumeSet {
     #[serde(default)]
-    pub volume: HashMap<String, u8>,
+    pub volume: BTreeMap<String, u8>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
