@@ -2,7 +2,14 @@
 
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use pipeweaver_profile::{
+    Devices,
+    VirtualSourceDevice,
+    PhysicalSourceDevice,
+    VirtualTargetDevice,
+    PhysicalTargetDevice,
+};
+use pipeweaver_shared::MuteTarget;
 
 /// Device type identifier
 #[pyclass]
@@ -116,6 +123,7 @@ impl DeviceColor {
 }
 
 /// Status data from PipeWeaver API
+/// Uses the same JSON structure as pipeweaver for compatibility
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Status {
     #[serde(default)]
@@ -131,75 +139,14 @@ pub struct AudioStatus {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ProfileStatus {
     #[serde(default)]
-    pub devices: DevicesTree,
+    pub devices: Devices,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct DevicesTree {
-    #[serde(default)]
-    pub sources: DeviceCategory,
-    #[serde(default)]
-    pub targets: DeviceCategory,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct DeviceCategory {
-    #[serde(default)]
-    pub virtual_devices: Vec<RawDevice>,
-    #[serde(default)]
-    pub physical_devices: Vec<RawDevice>,
-}
-
-/// Raw device data as received from PipeWeaver API
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct RawDevice {
-    #[serde(default)]
-    pub description: DeviceDescription,
-    #[serde(default)]
-    pub volume: Option<u8>,
-    #[serde(default)]
-    pub volumes: Option<VolumeSet>,
-    #[serde(default)]
-    pub mute_state: Option<String>,
-    #[serde(default)]
-    pub mute_states: Option<MuteStates>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct DeviceDescription {
-    #[serde(default)]
-    pub id: Option<String>,
-    #[serde(default)]
-    pub name: Option<String>,
-    #[serde(default)]
-    pub colour: Option<ColorData>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct ColorData {
-    #[serde(default)]
-    pub red: u8,
-    #[serde(default)]
-    pub green: u8,
-    #[serde(default)]
-    pub blue: u8,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct VolumeSet {
-    #[serde(default)]
-    pub volume: BTreeMap<String, u8>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct MuteStates {
-    #[serde(default)]
-    pub mute_state: Vec<String>,
-}
+// Use pipeweaver types directly - Devices is the devices tree
 
 impl Status {
     /// Get the devices tree from status
-    pub fn devices_tree(&self) -> &DevicesTree {
+    pub fn devices_tree(&self) -> &Devices {
         &self.audio.profile.devices
     }
 
@@ -209,12 +156,12 @@ impl Status {
         let mut devices = Vec::new();
 
         for raw in &tree.sources.virtual_devices {
-            if let Some(device) = Self::convert_device(raw, DeviceType::Source, false) {
+            if let Some(device) = Self::convert_virtual_source(raw) {
                 devices.push(device);
             }
         }
         for raw in &tree.sources.physical_devices {
-            if let Some(device) = Self::convert_device(raw, DeviceType::Source, true) {
+            if let Some(device) = Self::convert_physical_source(raw) {
                 devices.push(device);
             }
         }
@@ -228,12 +175,12 @@ impl Status {
         let mut devices = Vec::new();
 
         for raw in &tree.targets.virtual_devices {
-            if let Some(device) = Self::convert_device(raw, DeviceType::Target, false) {
+            if let Some(device) = Self::convert_virtual_target(raw) {
                 devices.push(device);
             }
         }
         for raw in &tree.targets.physical_devices {
-            if let Some(device) = Self::convert_device(raw, DeviceType::Target, true) {
+            if let Some(device) = Self::convert_physical_target(raw) {
                 devices.push(device);
             }
         }
@@ -255,23 +202,63 @@ impl Status {
             .find(|d| d.id == device_id && device_type.is_none_or(|t| d.device_type == t))
     }
 
-    /// Convert raw device data to Device
-    fn convert_device(raw: &RawDevice, device_type: DeviceType, is_physical: bool) -> Option<Device> {
-        let id = raw.description.id.as_ref()?;
-        let name = raw.description.name.as_ref()?;
+    /// Convert virtual source device
+    fn convert_virtual_source(raw: &VirtualSourceDevice) -> Option<Device> {
+        Self::convert_source_common(&raw.description, &raw.volumes, &raw.mute_states, false)
+    }
 
-        let volume = Self::extract_volume(raw, device_type);
-        let is_muted = Self::extract_mute_state(raw, device_type);
-        let color = raw.description.colour.as_ref().map(|c| DeviceColor {
-            red: c.red,
-            green: c.green,
-            blue: c.blue,
+    /// Convert physical source device
+    fn convert_physical_source(raw: &PhysicalSourceDevice) -> Option<Device> {
+        Self::convert_source_common(&raw.description, &raw.volumes, &raw.mute_states, true)
+    }
+
+    /// Convert virtual target device
+    fn convert_virtual_target(raw: &VirtualTargetDevice) -> Option<Device> {
+        Self::convert_target_common(&raw.description, &raw.volume, &raw.mute_state, false)
+    }
+
+    /// Convert physical target device
+    fn convert_physical_target(raw: &PhysicalTargetDevice) -> Option<Device> {
+        Self::convert_target_common(&raw.description, &raw.volume, &raw.mute_state, true)
+    }
+
+    /// Common conversion logic for sources
+    fn convert_source_common(
+        description: &pipeweaver_profile::DeviceDescription,
+        volumes: &pipeweaver_profile::Volumes,
+        mute_states: &pipeweaver_profile::MuteStates,
+        is_physical: bool,
+    ) -> Option<Device> {
+        let id = description.id.to_string();
+        let name = description.name.clone();
+
+        // Get volume for channel A (TargetA) - EnumMap iteration
+        // Find the volume for TargetA channel
+        let volume_val = volumes.volume
+            .iter()
+            .find(|(k, _)| format!("{:?}", k).contains("A"))
+            .map(|(_, &v)| v)
+            .unwrap_or_else(|| volumes.volume.values().next().copied().unwrap_or(50));
+        let volume = if volume_val > 100 {
+            ((volume_val as u16 * 100) / 255) as u8
+        } else {
+            volume_val
+        };
+
+        let is_muted = mute_states
+            .mute_state
+            .contains(&MuteTarget::TargetA);
+
+        let color = Some(DeviceColor {
+            red: description.colour.red,
+            green: description.colour.green,
+            blue: description.colour.blue,
         });
 
         Some(Device {
             id: id.clone(),
             name: name.clone(),
-            device_type,
+            device_type: DeviceType::Source,
             is_physical,
             volume,
             is_muted,
@@ -279,46 +266,39 @@ impl Status {
         })
     }
 
-    /// Extract volume from raw device, converting from 0-255 to 0-100 for sources
-    fn extract_volume(raw: &RawDevice, device_type: DeviceType) -> u8 {
-        match device_type {
-            DeviceType::Source => {
-                raw.volumes
-                    .as_ref()
-                    .and_then(|v| v.volume.get("A"))
-                    .map(|&v| {
-                        if v > 100 {
-                            ((v as u16 * 100) / 255) as u8
-                        } else {
-                            v
-                        }
-                    })
-                    .unwrap_or(50)
-            }
-            DeviceType::Target => {
-                raw.volume.map(|v| {
-                    if v > 100 {
-                        ((v as u16 * 100) / 255) as u8
-                    } else {
-                        v
-                    }
-                }).unwrap_or(50)
-            }
-        }
-    }
+    /// Common conversion logic for targets
+    fn convert_target_common(
+        description: &pipeweaver_profile::DeviceDescription,
+        volume: &u8,
+        mute_state: &pipeweaver_shared::MuteState,
+        is_physical: bool,
+    ) -> Option<Device> {
+        let id = description.id.to_string();
+        let name = description.name.clone();
 
-    /// Extract mute state from raw device
-    fn extract_mute_state(raw: &RawDevice, device_type: DeviceType) -> bool {
-        match device_type {
-            DeviceType::Source => {
-                raw.mute_states
-                    .as_ref()
-                    .is_some_and(|m| m.mute_state.contains(&"TargetA".to_string()))
-            }
-            DeviceType::Target => {
-                raw.mute_state.as_ref().is_some_and(|s| s == "Muted")
-            }
-        }
+        let volume = if *volume > 100 {
+            ((*volume as u16 * 100) / 255) as u8
+        } else {
+            *volume
+        };
+
+        let is_muted = matches!(mute_state, pipeweaver_shared::MuteState::Muted);
+
+        let color = Some(DeviceColor {
+            red: description.colour.red,
+            green: description.colour.green,
+            blue: description.colour.blue,
+        });
+
+        Some(Device {
+            id: id.clone(),
+            name: name.clone(),
+            device_type: DeviceType::Target,
+            is_physical,
+            volume,
+            is_muted,
+            color,
+        })
     }
 }
 
