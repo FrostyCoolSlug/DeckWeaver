@@ -260,11 +260,6 @@ impl Status {
         let id = raw.description.id.as_ref()?;
         let name = raw.description.name.as_ref()?;
 
-        // Skip monitor devices
-        if name.contains("Monitor") {
-            return None;
-        }
-
         let volume = Self::extract_volume(raw, device_type);
         let is_muted = Self::extract_mute_state(raw, device_type);
         let color = raw.description.colour.as_ref().map(|c| DeviceColor {
