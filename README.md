@@ -2,8 +2,6 @@
 
 A Stream Deck plugin for controlling PipeWeaver virtual audio devices. Provides hardware control for volume and mute through your Stream Deck device.
 
-**Version:** 0.2.0-alpha
-
 ## What is PipeWeaver?
 
 PipeWeaver is a virtual audio routing system that allows you to create and manage virtual audio devices. This plugin gives you physical control over those virtual devices directly from your Stream Deck, enabling real-time audio management with visual feedback.
