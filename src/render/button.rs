@@ -1,9 +1,6 @@
-//! Volume button renderer for Stream Deck keys (+/- buttons)
-
 use super::common::*;
 use pyo3::prelude::*;
 use tiny_skia::Pixmap;
-use image;
 
 const LARGE_SYMBOL_RATIO: f32 = 0.5;
 const LARGE_LINE_WIDTH_RATIO: f32 = 0.13;
@@ -14,7 +11,6 @@ const ICON_INSET_RATIO: f32 = 0.25;
 const MIN_LINE_WIDTH: f32 = 2.0;
 const MIN_CORNER_INSET: f32 = 4.0;
 
-/// Volume button renderer (+/- buttons)
 #[pyclass]
 pub struct ButtonRenderer {
     button_size: u32,
@@ -28,16 +24,10 @@ impl ButtonRenderer {
         Self { button_size }
     }
 
-    /// Render the volume button as PNG bytes
-    ///
-    /// Args:
-    ///     is_plus: True for plus button, False for minus, None for mute
-    ///     icon_png: Optional PNG bytes for custom icon
-    ///     is_muted: Whether the device is muted (affects mute button appearance)
     #[pyo3(signature = (is_plus=None, icon_png=None, is_muted=false))]
     pub fn render(&self, is_plus: Option<bool>, icon_png: Option<Vec<u8>>, is_muted: bool) -> PyResult<Vec<u8>> {
         let pixmap = self
-            .render_internal(is_plus, icon_png, is_muted)
+            .render_internal(is_plus, icon_png, None, is_muted)
             .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("Failed to render"))?;
 
         pixmap_to_png(&pixmap)
@@ -60,7 +50,11 @@ impl ButtonRenderer {
     }
 
     pub fn render_internal_png(&self, is_plus: Option<bool>, icon_png: Option<Vec<u8>>, is_muted: bool) -> Option<Vec<u8>> {
-        pixmap_to_png(&self.render_internal(is_plus, icon_png, is_muted)?)
+        pixmap_to_png(&self.render_internal(is_plus, icon_png, None, is_muted)?)
+    }
+
+    pub fn render_internal_png_with_cached(&self, is_plus: Option<bool>, cached_icon: Option<&crate::action::CachedIcon>, is_muted: bool) -> Option<Vec<u8>> {
+        pixmap_to_png(&self.render_internal(is_plus, None, cached_icon, is_muted)?)
     }
 
     pub fn render_unavailable_internal(&self) -> Option<Vec<u8>> {
@@ -71,22 +65,22 @@ impl ButtonRenderer {
         pixmap_to_png(&create_filled_pixmap(self.button_size, self.button_size, COLOR_TRANSPARENT)?)
     }
 
-    fn render_internal(&self, is_plus: Option<bool>, icon_png: Option<Vec<u8>>, is_muted: bool) -> Option<Pixmap> {
+    fn render_internal(&self, is_plus: Option<bool>, icon_png: Option<Vec<u8>>, cached_icon: Option<&crate::action::CachedIcon>, is_muted: bool) -> Option<Pixmap> {
         let size = self.button_size as f32;
         let mut pixmap = Pixmap::new(self.button_size, self.button_size)?;
         fill_background(&mut pixmap, COLOR_TRANSPARENT);
 
         let center = size / 2.0;
-        let has_icon = icon_png.is_some();
+        let has_icon = cached_icon.is_some() || icon_png.is_some();
 
-        // Draw icon first if it exists
-        if let Some(png_data) = icon_png {
+        if let Some(cached) = cached_icon {
+            self.composite_rgba8(&mut pixmap, &cached.rgba8, cached.width, cached.height);
+        } else if let Some(png_data) = icon_png {
             self.composite_icon(&mut pixmap, &png_data);
         }
 
         match is_plus {
             Some(true) => {
-                // Plus button
                 let (cx, cy, sym_size, line_width) = if has_icon {
                     let inset = (size * CORNER_INSET_RATIO).max(MIN_CORNER_INSET);
                     let sym = size * SMALL_SYMBOL_RATIO;
@@ -97,7 +91,6 @@ impl ButtonRenderer {
                 draw_symbol(&mut pixmap, cx, cy, sym_size, line_width, COLOR_WHITE, true);
             }
             Some(false) => {
-                // Minus button
                 let (cx, cy, sym_size, line_width) = if has_icon {
                     let inset = (size * CORNER_INSET_RATIO).max(MIN_CORNER_INSET);
                     let sym = size * SMALL_SYMBOL_RATIO;
@@ -108,21 +101,15 @@ impl ButtonRenderer {
                 draw_symbol(&mut pixmap, cx, cy, sym_size, line_width, COLOR_WHITE, false);
             }
             None => {
-                // Mute button
                 if has_icon {
-                    // With icon: red slash over icon when muted (matching knob style: 6.0 width, COLOR_RED)
                     if is_muted {
-                        // Calculate icon bounds (same as in composite_icon)
                         let inset = (size * ICON_INSET_RATIO).max(MIN_CORNER_INSET);
                         let icon_size = size - inset * 2.0;
                         let icon_x = inset;
                         let icon_y = inset;
-                        // Draw diagonal line across icon (matching knob: 6.0 width, COLOR_RED)
-                        // Flipped: from top-left to bottom-right
                         draw_diagonal_line(&mut pixmap, icon_x, icon_y, icon_x + icon_size, icon_y + icon_size, 6.0, COLOR_RED);
                     }
                     
-                    // White slash in bottom right corner (always shown when icon exists)
                     let inset = (size * CORNER_INSET_RATIO).max(MIN_CORNER_INSET);
                     let corner_sym = size * SMALL_SYMBOL_RATIO;
                     let corner_cx = size - inset - corner_sym / 2.0;
@@ -131,15 +118,12 @@ impl ButtonRenderer {
                     let corner_offset = corner_sym * 0.35;
                     draw_diagonal_line(&mut pixmap, corner_cx + corner_offset, corner_cy - corner_offset, corner_cx - corner_offset, corner_cy + corner_offset, corner_width, COLOR_WHITE);
                 } else {
-                    // No custom icon: red slash when muted only (default icon is always shown)
                     if is_muted {
                         let sym_size = size * LARGE_SYMBOL_RATIO;
                         let line_width = 6.0;
                         let offset = sym_size * 0.35;
-                        // Flipped: from top-left to bottom-right
                         draw_diagonal_line(&mut pixmap, center - offset, center - offset, center + offset, center + offset, line_width, COLOR_RED);
                     }
-                    // When unmuted, just show the default icon (no slash needed)
                 }
             }
         }
@@ -157,24 +141,32 @@ impl ButtonRenderer {
         let scale = (max_size / iw).min(max_size / ih).min(1.0);
         let (sw, sh) = ((iw * scale) as u32, (ih * scale) as u32);
 
-        let resized = img.resize(sw, sh, image::imageops::FilterType::Lanczos3).to_rgba8();
+        let resized = img.resize(sw, sh, image::imageops::FilterType::Triangle).to_rgba8();
+        self.composite_rgba8(pixmap, &resized, sw, sh);
+    }
+
+    fn composite_rgba8(&self, pixmap: &mut Pixmap, rgba8: &image::RgbaImage, sw: u32, sh: u32) {
+        let size = self.button_size as f32;
         let (fx, fy) = (
             ((size - sw as f32) / 2.0) as i32,
             ((size - sh as f32) / 2.0) as i32,
         );
-
         // Alpha-blend each pixel
-        for (ix, iy, pixel) in resized.enumerate_pixels() {
+        for (ix, iy, pixel) in rgba8.enumerate_pixels() {
             let (px, py) = (fx + ix as i32, fy + iy as i32);
             if px < 0 || py < 0 || px >= self.button_size as i32 || py >= self.button_size as i32 {
                 continue;
             }
             let src_a = pixel[3] as f32 / 255.0;
-            if src_a == 0.0 { continue; }
+            if src_a == 0.0 {
+                continue;
+            }
 
             let idx = (py as usize * self.button_size as usize + px as usize) * 4;
             let data = pixmap.data_mut();
-            if idx + 3 >= data.len() { continue; }
+            if idx + 3 >= data.len() {
+                continue;
+            }
 
             let dst_a = data[idx + 3] as f32 / 255.0;
             let out_a = src_a + dst_a * (1.0 - src_a);

@@ -75,9 +75,9 @@ def _get_core() -> DeckWeaverCore:
     if _core is None:
         _core = DeckWeaverCore()
         _core.start()
-        # Start polling timer (~60fps = ~16ms interval)
+        # Start polling timer (~30fps = ~33ms interval, matches render rate)
         if _poll_timeout_id is None:
-            _poll_timeout_id = GLib.timeout_add(16, _poll_updates)
+            _poll_timeout_id = GLib.timeout_add(33, _poll_updates)
     return _core
 
 
@@ -489,6 +489,24 @@ class BaseAction(ActionBase):
         self.volume_step_row.set_title(lm.get("ui.volume_step.title"))
         self.volume_step_row.connect("notify::value", self._on_volume_step_changed)
 
+        # Volume Bar Color Row
+        volume_bar_color_row = Adw.ActionRow()
+        volume_bar_color_row.set_title("Volume Bar Color")
+        volume_bar_color_row.set_subtitle("Override the volume bar color")
+        
+        volume_bar_color_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        self.volume_bar_color_button = Gtk.ColorButton(valign=Gtk.Align.CENTER)
+        self.volume_bar_color_button.set_rgba(self._create_rgba_from_color(self._volume_bar_color))
+        self.volume_bar_color_button.connect("color-set", self._on_volume_bar_color_changed)
+        volume_bar_color_box.append(self.volume_bar_color_button)
+        
+        clear_volume_bar_color_button = Gtk.Button(icon_name="edit-clear-symbolic", valign=Gtk.Align.CENTER)
+        clear_volume_bar_color_button.set_tooltip_text("Clear override")
+        clear_volume_bar_color_button.connect("clicked", self._on_clear_volume_bar_color_clicked)
+        volume_bar_color_box.append(clear_volume_bar_color_button)
+        
+        volume_bar_color_row.add_suffix(volume_bar_color_box)
+
         # Meters Enabled Row
         meters_enabled_row = Adw.ActionRow()
         meters_enabled_row.set_title("Meters Enabled")
@@ -525,24 +543,6 @@ class BaseAction(ActionBase):
 
         # Set initial sensitivity after UI is created
         self._update_meter_color_sensitivity()
-
-        # Volume Bar Color Row
-        volume_bar_color_row = Adw.ActionRow()
-        volume_bar_color_row.set_title("Volume Bar Color")
-        volume_bar_color_row.set_subtitle("Override the volume bar color")
-        
-        volume_bar_color_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        self.volume_bar_color_button = Gtk.ColorButton(valign=Gtk.Align.CENTER)
-        self.volume_bar_color_button.set_rgba(self._create_rgba_from_color(self._volume_bar_color))
-        self.volume_bar_color_button.connect("color-set", self._on_volume_bar_color_changed)
-        volume_bar_color_box.append(self.volume_bar_color_button)
-        
-        clear_volume_bar_color_button = Gtk.Button(icon_name="edit-clear-symbolic", valign=Gtk.Align.CENTER)
-        clear_volume_bar_color_button.set_tooltip_text("Clear override")
-        clear_volume_bar_color_button.connect("clicked", self._on_clear_volume_bar_color_clicked)
-        volume_bar_color_box.append(clear_volume_bar_color_button)
-        
-        volume_bar_color_row.add_suffix(volume_bar_color_box)
         
         rows = [
             self.device_expander,
@@ -554,9 +554,9 @@ class BaseAction(ActionBase):
         class_name = self.__class__.__name__
         if class_name != "ButtonAction":
             rows.extend([
+                volume_bar_color_row,
                 meters_enabled_row,
                 meter_color_row,
-                volume_bar_color_row,
             ])
         
         return rows

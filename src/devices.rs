@@ -1,7 +1,7 @@
-//! Device types and helpers for working with PipeWeaver audio devices
-
+use parking_lot::RwLock;
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use pipeweaver_profile::{
     Devices,
     VirtualSourceDevice,
@@ -11,7 +11,6 @@ use pipeweaver_profile::{
 };
 use pipeweaver_shared::MuteTarget;
 
-/// Device type identifier
 #[pyclass]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum DeviceType {
@@ -53,18 +52,15 @@ impl DeviceType {
         }
     }
 
-    /// Check if this is a source type
     fn is_source(&self) -> bool {
         matches!(self, DeviceType::Source)
     }
 
-    /// Check if this is a target type
     fn is_target(&self) -> bool {
         matches!(self, DeviceType::Target)
     }
 }
 
-/// Represents a PipeWeaver audio device
 #[pyclass]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Device {
@@ -94,7 +90,6 @@ impl Device {
     }
 }
 
-/// RGB color from device description
 #[pyclass]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct DeviceColor {
@@ -122,12 +117,12 @@ impl DeviceColor {
     }
 }
 
-/// Status data from PipeWeaver API
-/// Uses the same JSON structure as pipeweaver for compatibility
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Status {
     #[serde(default)]
     pub audio: AudioStatus,
+    #[serde(skip)]
+    device_index: RwLock<Option<HashMap<String, Device>>>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -144,13 +139,38 @@ pub struct ProfileStatus {
 
 // Use pipeweaver types directly - Devices is the devices tree
 
+impl Default for Status {
+    fn default() -> Self {
+        Self {
+            audio: AudioStatus::default(),
+            device_index: RwLock::new(None),
+        }
+    }
+}
+
+impl Clone for Status {
+    fn clone(&self) -> Self {
+        Self {
+            audio: self.audio.clone(),
+            device_index: RwLock::new(None),
+        }
+    }
+}
+
 impl Status {
-    /// Get the devices tree from status
     pub fn devices_tree(&self) -> &Devices {
         &self.audio.profile.devices
     }
 
-    /// Get all source devices
+    pub(crate) fn rebuild_index(&self) {
+        let mut index = HashMap::new();
+        for device in self.get_all_devices() {
+            index.insert(device.id.clone(), device);
+        }
+        *self.device_index.write() = Some(index);
+    }
+
+
     pub fn get_sources(&self) -> Vec<Device> {
         let tree = self.devices_tree();
         let mut devices = Vec::new();
@@ -169,7 +189,6 @@ impl Status {
         devices
     }
 
-    /// Get all target devices
     pub fn get_targets(&self) -> Vec<Device> {
         let tree = self.devices_tree();
         let mut devices = Vec::new();
@@ -188,41 +207,53 @@ impl Status {
         devices
     }
 
-    /// Get all devices as a flat list
     pub fn get_all_devices(&self) -> Vec<Device> {
         let mut devices = self.get_sources();
         devices.extend(self.get_targets());
         devices
     }
 
-    /// Find a device by ID
     pub fn get_device(&self, device_id: &str, device_type: Option<DeviceType>) -> Option<Device> {
-        self.get_all_devices()
-            .into_iter()
-            .find(|d| d.id == device_id && device_type.is_none_or(|t| d.device_type == t))
+        {
+            let index_guard = self.device_index.read();
+            if index_guard.is_none() {
+                drop(index_guard);
+                self.rebuild_index();
+            }
+        }
+        
+        let index_guard = self.device_index.read();
+        if let Some(ref index) = *index_guard {
+            index.get(device_id).and_then(|d| {
+                if device_type.is_none_or(|t| d.device_type == t) {
+                    Some(d.clone())
+                } else {
+                    None
+                }
+            })
+        } else {
+            self.get_all_devices()
+                .into_iter()
+                .find(|d| d.id == device_id && device_type.is_none_or(|t| d.device_type == t))
+        }
     }
 
-    /// Convert virtual source device
     fn convert_virtual_source(raw: &VirtualSourceDevice) -> Option<Device> {
         Self::convert_source_common(&raw.description, &raw.volumes, &raw.mute_states, false)
     }
 
-    /// Convert physical source device
     fn convert_physical_source(raw: &PhysicalSourceDevice) -> Option<Device> {
         Self::convert_source_common(&raw.description, &raw.volumes, &raw.mute_states, true)
     }
 
-    /// Convert virtual target device
     fn convert_virtual_target(raw: &VirtualTargetDevice) -> Option<Device> {
         Self::convert_target_common(&raw.description, &raw.volume, &raw.mute_state, false)
     }
 
-    /// Convert physical target device
     fn convert_physical_target(raw: &PhysicalTargetDevice) -> Option<Device> {
         Self::convert_target_common(&raw.description, &raw.volume, &raw.mute_state, true)
     }
 
-    /// Common conversion logic for sources
     fn convert_source_common(
         description: &pipeweaver_profile::DeviceDescription,
         volumes: &pipeweaver_profile::Volumes,
@@ -232,8 +263,6 @@ impl Status {
         let id = description.id.to_string();
         let name = description.name.clone();
 
-        // Get volume for channel A (TargetA) - EnumMap iteration
-        // Find the volume for TargetA channel
         let volume_val = volumes.volume
             .iter()
             .find(|(k, _)| format!("{:?}", k).contains("A"))
@@ -266,7 +295,6 @@ impl Status {
         })
     }
 
-    /// Common conversion logic for targets
     fn convert_target_common(
         description: &pipeweaver_profile::DeviceDescription,
         volume: &u8,
@@ -300,6 +328,92 @@ impl Status {
             color,
         })
     }
+}
+
+pub(crate) fn apply_patch_op(doc: &mut serde_json::Value, op: &serde_json::Value) -> Result<(), String> {
+    let operation = op.get("op").and_then(|v| v.as_str()).ok_or("Missing op")?;
+    let path = op
+        .get("path")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing path")?;
+
+    let (parent, key) = resolve_pointer_parent(doc, path)?;
+
+    match operation {
+        "add" | "replace" => {
+            let value = op.get("value").cloned().ok_or("Missing value")?;
+            match parent {
+                serde_json::Value::Array(arr) => {
+                    if key == "-" {
+                        arr.push(value);
+                    } else {
+                        let idx: usize = key.parse().map_err(|_| "Invalid array index")?;
+                        if idx >= arr.len() {
+                            arr.push(value);
+                        } else {
+                            arr[idx] = value;
+                        }
+                    }
+                }
+                serde_json::Value::Object(obj) => {
+                    obj.insert(key, value);
+                }
+                _ => return Err("Parent is not a container".into()),
+            }
+        }
+        "remove" => match parent {
+            serde_json::Value::Array(arr) => {
+                let idx: usize = key.parse().map_err(|_| "Invalid array index")?;
+                if idx < arr.len() {
+                    arr.remove(idx);
+                }
+            }
+            serde_json::Value::Object(obj) => {
+                obj.remove(&key);
+            }
+            _ => return Err("Parent is not a container".into()),
+        },
+        _ => {
+            tracing::warn!("Unsupported patch operation: {}", operation);
+        }
+    }
+
+    Ok(())
+}
+
+fn resolve_pointer_parent<'a>(
+    doc: &'a mut serde_json::Value,
+    path: &str,
+) -> Result<(&'a mut serde_json::Value, String), String> {
+    if !path.starts_with('/') {
+        return Err("Path must start with /".into());
+    }
+
+    let parts: Vec<String> = path[1..]
+        .split('/')
+        .map(|p| p.replace("~1", "/").replace("~0", "~"))
+        .collect();
+
+    if parts.is_empty() {
+        return Err("Empty path".into());
+    }
+
+    let key = parts.last().ok_or("Empty path")?.clone();
+    let parent_path = &parts[..parts.len() - 1];
+
+    let mut current = doc;
+    for part in parent_path {
+        current = match current {
+            serde_json::Value::Array(arr) => {
+                let idx: usize = part.parse().map_err(|_| "Invalid array index")?;
+                arr.get_mut(idx).ok_or("Array index out of bounds")?
+            }
+            serde_json::Value::Object(obj) => obj.entry(part.as_str()).or_insert(serde_json::Value::Object(Default::default())),
+            _ => return Err("Cannot traverse non-container".into()),
+        };
+    }
+
+    Ok((current, key))
 }
 
 #[cfg(test)]

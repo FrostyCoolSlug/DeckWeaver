@@ -1,8 +1,5 @@
-//! Common rendering utilities and types
-
 use tiny_skia::{Color, FillRule, Paint, PathBuilder, Pixmap, Stroke, Transform};
 
-/// RGBA color as bytes
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Rgba {
     pub r: u8,
@@ -53,13 +50,10 @@ impl From<(u8, u8, u8, u8)> for Rgba {
     }
 }
 
-// Standard colors
 pub const COLOR_TRANSPARENT: Rgba = Rgba::new(0, 0, 0, 0);
 pub const COLOR_BLACK: Rgba = Rgba::rgb(0, 0, 0);
 pub const COLOR_WHITE: Rgba = Rgba::rgb(255, 255, 255);
 pub const COLOR_RED: Rgba = Rgba::rgb(255, 0, 0);
-
-// UI colors
 pub const COLOR_SOURCE_FILL: Rgba = Rgba::rgb(102, 179, 255);
 pub const COLOR_TARGET_FILL: Rgba = Rgba::rgb(102, 255, 102);
 pub const COLOR_GUTTER_DARK: Rgba = Rgba::rgb(120, 120, 120);
@@ -68,7 +62,6 @@ pub const COLOR_SERVICE_UNAVAILABLE_BG: Rgba = Rgba::rgb(255, 193, 7);
 
 const GUTTER_LUMINANCE_THRESHOLD: f32 = 0.1;
 
-/// Common rendering parameters to reduce function argument count
 #[derive(Debug, Clone, Default)]
 pub struct RenderParams {
     pub volume: u8,
@@ -83,7 +76,6 @@ pub struct RenderParams {
 }
 
 impl RenderParams {
-    /// Determine the fill color based on device type and overrides
     pub fn fill_color(&self) -> Option<Rgba> {
         if self.volume == 0 {
             return None;
@@ -101,7 +93,6 @@ impl RenderParams {
     }
 }
 
-/// Get appropriate gutter color based on fill color brightness
 pub fn gutter_color_for(fill_color: Option<Rgba>) -> Rgba {
     match fill_color {
         Some(c) if c.luminance() < GUTTER_LUMINANCE_THRESHOLD => COLOR_GUTTER_LIGHT,
@@ -128,7 +119,6 @@ fn rounded_rect_path(x: f32, y: f32, w: f32, h: f32, radius: f32) -> Option<tiny
     pb.finish()
 }
 
-/// Create a paint with solid color
 pub fn solid_paint(color: Rgba) -> Paint<'static> {
     let mut paint = Paint::default();
     paint.set_color(color.as_color());
@@ -136,12 +126,10 @@ pub fn solid_paint(color: Rgba) -> Paint<'static> {
     paint
 }
 
-/// Fill a pixmap with a solid color
 pub fn fill_background(pixmap: &mut Pixmap, color: Rgba) {
     pixmap.fill(color.as_color());
 }
 
-/// Rectangle specification for drawing
 #[derive(Debug, Clone, Copy)]
 pub struct Rect {
     pub x: f32,
@@ -184,7 +172,6 @@ fn stroke_line(pixmap: &mut Pixmap, x1: f32, y1: f32, x2: f32, y2: f32, width: f
     }
 }
 
-/// Draw a plus or minus symbol
 pub fn draw_symbol(pixmap: &mut Pixmap, cx: f32, cy: f32, size: f32, width: f32, color: Rgba, is_plus: bool) {
     let half = size / 2.0;
     stroke_line(pixmap, cx - half, cy, cx + half, cy, width, color);
@@ -193,17 +180,14 @@ pub fn draw_symbol(pixmap: &mut Pixmap, cx: f32, cy: f32, size: f32, width: f32,
     }
 }
 
-/// Draw a diagonal line (for mute indicator)
 pub fn draw_diagonal_line(pixmap: &mut Pixmap, x1: f32, y1: f32, x2: f32, y2: f32, width: f32, color: Rgba) {
     stroke_line(pixmap, x1, y1, x2, y2, width, color);
 }
 
-/// Convert Pixmap to PNG bytes
 pub fn pixmap_to_png(pixmap: &Pixmap) -> Option<Vec<u8>> {
     pixmap.encode_png().ok()
 }
 
-/// Create a pixmap filled with a color
 pub fn create_filled_pixmap(width: u32, height: u32, color: Rgba) -> Option<Pixmap> {
     let mut pixmap = Pixmap::new(width, height)?;
     fill_background(&mut pixmap, color);

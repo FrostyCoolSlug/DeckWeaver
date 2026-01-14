@@ -1,5 +1,3 @@
-//! Icon loading and conversion utilities
-
 use image::{imageops::FilterType, ImageEncoder};
 use pyo3::prelude::*;
 use resvg::{tiny_skia, usvg};
@@ -9,23 +7,14 @@ use std::path::Path;
 const DEFAULT_ICON_SIZE: u32 = 200;
 const MIN_ICON_SIZE: u32 = 200;
 
-/// Load an icon file and convert it to PNG bytes
-/// 
-/// Supports:
-/// - SVG files (rendered to PNG using resvg)
-/// - PNG, JPEG, GIF, WebP, BMP, and other formats (via image crate)
-/// 
-/// Icons smaller than 200px are scaled up to maintain quality.
 #[pyfunction]
 pub fn load_icon_to_png(path: &str) -> PyResult<Option<Vec<u8>>> {
     let path_obj = Path::new(path);
     
-    // Check if file exists
     if !path_obj.exists() {
         return Ok(None);
     }
     
-    // Handle SVG files
     if path_obj.extension()
         .and_then(|ext| ext.to_str())
         .map(|ext| ext.eq_ignore_ascii_case("svg"))
@@ -34,11 +23,9 @@ pub fn load_icon_to_png(path: &str) -> PyResult<Option<Vec<u8>>> {
         return load_svg_to_png(path);
     }
     
-    // Handle other image formats
     load_image_to_png(path)
 }
 
-/// Load and convert SVG to PNG
 fn load_svg_to_png(path: &str) -> PyResult<Option<Vec<u8>>> {
     let svg_data = match fs::read(path) {
         Ok(data) => data,
@@ -48,7 +35,6 @@ fn load_svg_to_png(path: &str) -> PyResult<Option<Vec<u8>>> {
         }
     };
     
-    // Parse SVG
     let opt = usvg::Options::default();
     let tree = match usvg::Tree::from_data(&svg_data, &opt) {
         Ok(tree) => tree,
@@ -71,7 +57,6 @@ fn load_svg_to_png(path: &str) -> PyResult<Option<Vec<u8>>> {
         (DEFAULT_ICON_SIZE, DEFAULT_ICON_SIZE, 1.0, 1.0)
     };
     
-    // Render to pixmap
     let mut pixmap = match tiny_skia::Pixmap::new(target_width, target_height) {
         Some(pixmap) => pixmap,
         None => {
@@ -80,13 +65,9 @@ fn load_svg_to_png(path: &str) -> PyResult<Option<Vec<u8>>> {
         }
     };
     
-    // Calculate transform to scale SVG to target size
     let transform = tiny_skia::Transform::from_scale(scale_x, scale_y);
-    
-    // Render SVG using resvg
     resvg::render(&tree, transform, &mut pixmap.as_mut());
     
-    // Encode as PNG
     match pixmap.encode_png() {
         Ok(png_data) => Ok(Some(png_data)),
         Err(e) => {
@@ -96,9 +77,7 @@ fn load_svg_to_png(path: &str) -> PyResult<Option<Vec<u8>>> {
     }
 }
 
-/// Load and convert image file to PNG
 fn load_image_to_png(path: &str) -> PyResult<Option<Vec<u8>>> {
-    // Load image
     let img = match image::open(path) {
         Ok(img) => img,
         Err(e) => {
@@ -107,24 +86,19 @@ fn load_image_to_png(path: &str) -> PyResult<Option<Vec<u8>>> {
         }
     };
     
-    // Convert to RGBA
     let rgba_img = img.to_rgba8();
-    
-    // Scale up if needed
     let (width, height) = rgba_img.dimensions();
     let max_dim = width.max(height);
     
     let final_img = if max_dim < MIN_ICON_SIZE {
-        // Scale up small icons
         let scale = MIN_ICON_SIZE as f32 / max_dim as f32;
         let new_width = (width as f32 * scale) as u32;
         let new_height = (height as f32 * scale) as u32;
-        image::imageops::resize(&rgba_img, new_width, new_height, FilterType::Lanczos3)
+        image::imageops::resize(&rgba_img, new_width, new_height, FilterType::Triangle)
     } else {
         rgba_img
     };
     
-    // Encode as PNG
     let mut png_data = Vec::new();
     {
         let encoder = image::codecs::png::PngEncoder::new(&mut png_data);

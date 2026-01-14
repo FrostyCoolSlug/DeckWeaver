@@ -1,10 +1,10 @@
-//! Action state management for Stream Deck buttons/dials
-
 use crate::devices::Device;
+use parking_lot::RwLock;
 use pyo3::prelude::*;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicU8, Ordering};
 
-/// Type of action (determines rendering)
 #[pyclass]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActionType {
@@ -31,57 +31,33 @@ impl ActionType {
     }
 }
 
-/// Configuration for an action (set from Python)
 #[pyclass]
 #[derive(Debug, Clone)]
 pub struct ActionConfig {
-    /// Unique action ID (from Python)
     #[pyo3(get, set)]
     pub action_id: String,
-
-    /// Type of action
     #[pyo3(get, set)]
     pub action_type: ActionType,
-
-    /// Target device ID
     #[pyo3(get, set)]
     pub device_id: Option<String>,
-
-    /// Volume step for adjustments
     #[pyo3(get, set)]
     pub volume_step: i8,
-
-    /// Image dimensions
     #[pyo3(get, set)]
     pub width: u32,
     #[pyo3(get, set)]
     pub height: u32,
-
-    /// Whether meters are enabled
     #[pyo3(get, set)]
     pub meters_enabled: bool,
-
-    /// Whether to invert meter color
     #[pyo3(get, set)]
     pub meter_invert: bool,
-
-    /// Custom volume bar color (RGBA)
     #[pyo3(get, set)]
     pub volume_bar_color: Option<(u8, u8, u8, u8)>,
-
-    /// Custom meter color (RGBA)
     #[pyo3(get, set)]
     pub meter_color: Option<(u8, u8, u8, u8)>,
-
-    /// Orientation for slider ("vertical" or "horizontal")
     #[pyo3(get, set)]
     pub orientation: String,
-
-    /// Is this the top part of a slider (positive volume step)
     #[pyo3(get, set)]
     pub is_top: bool,
-
-    /// Custom icon PNG bytes
     #[pyo3(get, set)]
     pub icon_png: Option<Vec<u8>>,
 }
@@ -114,14 +90,29 @@ impl ActionConfig {
     }
 }
 
-/// Runtime state for an action (managed by Rust)
+#[derive(Debug, Clone)]
+pub struct CachedIcon {
+    pub rgba8: image::RgbaImage,
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct CachedBaseRender {
+    pub pixmap: tiny_skia::Pixmap,
+    pub base_hash: u64,
+}
+
 #[derive(Debug)]
 pub struct ActionState {
     pub config: ActionConfig,
     pub device: Option<Device>,
     pub meter_value: AtomicU8,
-    pub last_render_hash: AtomicU8, // Simple hash to detect changes
-    pub last_label: parking_lot::RwLock<Option<String>>, // Track label changes
+    pub last_render_hash: AtomicU8,
+    pub last_label: parking_lot::RwLock<Option<String>>,
+    pub cached_icon: RwLock<Option<(u64, CachedIcon)>>,
+    pub cached_base: RwLock<Option<CachedBaseRender>>,
+    pub cached_base_hash: parking_lot::RwLock<Option<u64>>,
 }
 
 impl ActionState {
@@ -132,10 +123,92 @@ impl ActionState {
             meter_value: AtomicU8::new(0),
             last_render_hash: AtomicU8::new(0),
             last_label: parking_lot::RwLock::new(None),
+            cached_icon: RwLock::new(None),
+            cached_base: RwLock::new(None),
+            cached_base_hash: parking_lot::RwLock::new(None),
         }
     }
 
-    /// Check if the label changed and update tracking
+    pub fn base_hash(&self) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        if let Some(ref device) = self.device {
+            device.volume.hash(&mut hasher);
+            device.is_muted.hash(&mut hasher);
+            if let Some(color) = &device.color {
+                color.red.hash(&mut hasher);
+                color.green.hash(&mut hasher);
+                color.blue.hash(&mut hasher);
+            }
+        }
+        self.config.volume_bar_color.hash(&mut hasher);
+        self.config.meter_color.hash(&mut hasher);
+        self.config.meter_invert.hash(&mut hasher);
+        self.config.meters_enabled.hash(&mut hasher);
+        if let Some(ref icon_png) = self.config.icon_png {
+            icon_png.hash(&mut hasher);
+        }
+        if self.config.action_type == crate::action::ActionType::Slider {
+            self.config.orientation.hash(&mut hasher);
+            self.config.is_top.hash(&mut hasher);
+        }
+        let current_hash = hasher.finish();
+        
+        let mut cached_hash_guard = self.cached_base_hash.write();
+        if let Some(cached) = *cached_hash_guard {
+            if cached == current_hash {
+                return cached;
+            }
+        }
+        *cached_hash_guard = Some(current_hash);
+        current_hash
+    }
+
+    pub fn needs_base_rebuild(&self) -> bool {
+        let current_hash = self.base_hash();
+        let cached = self.cached_base.read();
+        cached.as_ref().map_or(true, |c| c.base_hash != current_hash)
+    }
+
+    pub fn get_cached_icon(&self, png_data: Option<&[u8]>, max_size: f32) -> Option<CachedIcon> {
+        let Some(png_data) = png_data else {
+            *self.cached_icon.write() = None;
+            return None;
+        };
+
+        let mut hasher = DefaultHasher::new();
+        png_data.hash(&mut hasher);
+        let icon_hash = hasher.finish();
+
+        {
+            let cached = self.cached_icon.read();
+            if let Some((cached_hash, cached_icon)) = cached.as_ref() {
+                if *cached_hash == icon_hash {
+                    return Some(cached_icon.clone());
+                }
+            }
+        }
+
+        let Ok(img) = image::load_from_memory(png_data) else {
+            return None;
+        };
+
+        let (iw, ih) = (img.width() as f32, img.height() as f32);
+        let scale = (max_size / iw).min(max_size / ih).min(1.0);
+        let (sw, sh) = ((iw * scale) as u32, (ih * scale) as u32);
+
+        let resized = img.resize(sw, sh, image::imageops::FilterType::Triangle).to_rgba8();
+
+        let cached = CachedIcon {
+            rgba8: resized,
+            width: sw,
+            height: sh,
+        };
+
+        *self.cached_icon.write() = Some((icon_hash, cached.clone()));
+
+        Some(cached)
+    }
+
     pub fn label_changed(&self, new_label: Option<&str>) -> bool {
         let mut last = self.last_label.write();
         let changed = last.as_deref() != new_label;
@@ -153,7 +226,6 @@ impl ActionState {
         self.meter_value.store(value, Ordering::Relaxed);
     }
 
-    /// Calculate a simple hash of render state to detect changes
     pub fn render_hash(&self) -> u8 {
         let mut hash: u8 = 0;
         if let Some(ref device) = self.device {

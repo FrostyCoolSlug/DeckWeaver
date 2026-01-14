@@ -1,5 +1,3 @@
-//! Slider button renderer for Stream Deck keys
-
 use super::common::*;
 use pyo3::prelude::*;
 use tiny_skia::Pixmap;
@@ -11,7 +9,6 @@ const METER_WIDTH: f32 = 11.0;
 const METER_MARGIN_Y: f32 = 2.0;
 const STROKE_WIDTH: f32 = 2.0;
 
-/// Slider button renderer - creates top/bottom half of a virtual slider
 #[pyclass]
 pub struct SliderRenderer {
     button_size: u32,
@@ -86,6 +83,26 @@ impl SliderRenderer {
     }
 
     fn render_internal(&self, params: &RenderParams, is_top: bool, is_horizontal: bool) -> Option<Pixmap> {
+        let mut full = self.render_base(params)?;
+        
+        if params.meters_enabled && params.meter_value > 0 {
+            self.render_meter_overlay(&mut full, params);
+        }
+        
+        let mut result = Pixmap::new(self.button_size, self.button_size)?;
+        let y_off = if is_top { 0 } else { self.button_size as usize };
+        let row_bytes = self.button_size as usize * 4;
+
+        for y in 0..self.button_size as usize {
+            let src = (y + y_off) * row_bytes;
+            let dst = y * row_bytes;
+            result.data_mut()[dst..dst + row_bytes].copy_from_slice(&full.data()[src..src + row_bytes]);
+        }
+
+        if is_horizontal { self.rotate_cw(&result) } else { Some(result) }
+    }
+
+    pub fn render_base(&self, params: &RenderParams) -> Option<Pixmap> {
         let size = self.button_size as f32;
         let double_h = size * 2.0;
 
@@ -100,14 +117,11 @@ impl SliderRenderer {
         let fill_color = params.fill_color();
         let fill_h = (params.volume as f32 / 100.0) * slider_h;
 
-        // Calculate half-circle radius for gutter (always full height)
         let gutter_radius = (BAR_WIDTH / 2.0).min(slider_h / 2.0);
         
-        // Gutter
         let bar = Rect::new(slider_x, slider_y, BAR_WIDTH, slider_h, gutter_radius);
         bar.draw_filled(&mut full, gutter_color_for(fill_color));
 
-        // Volume fill (from bottom) - half-circle radius
         let fill_radius = (BAR_WIDTH / 2.0).min(fill_h / 2.0);
         if let Some(color) = fill_color {
             if fill_h > 0.0 {
@@ -116,21 +130,29 @@ impl SliderRenderer {
             }
         }
 
-        // Stroke
         bar.draw_stroked(&mut full, COLOR_BLACK, STROKE_WIDTH);
 
-        // Meter overlay - half-circle radius (always starts from bottom before rotation)
-        if params.meters_enabled && params.meter_value > 0 && fill_h > 0.0 {
+        Some(full)
+    }
+
+    pub fn render_meter_overlay(&self, full: &mut Pixmap, params: &RenderParams) {
+        let size = self.button_size as f32;
+        let double_h = size * 2.0;
+        let slider_y = CORNER_INSET + BAR_OFFSET_Y;
+        let slider_h = double_h - CORNER_INSET * 2.0 - BAR_OFFSET_Y;
+        let slider_x = (size - BAR_WIDTH) / 2.0;
+        
+        let fill_color = params.fill_color();
+        let fill_h = (params.volume as f32 / 100.0) * slider_h;
+        
+        if params.meter_value > 0 && fill_h > 0.0 {
             if let Some(fc) = fill_color {
                 let fill_y = slider_y + slider_h - fill_h;
-                // Meter offset from edge (same for both orientations before rotation)
                 let meter_offset = METER_MARGIN_Y * 4.0;
-                // Meter horizontal position (centers meter in bar width)
                 let meter_x = slider_x + (BAR_WIDTH - METER_WIDTH) / 2.0;
                 let available = fill_h - meter_offset * 2.0;
                 if available > 0.0 {
                     let meter_h = (params.meter_value as f32 / 100.0) * available;
-                    // Always start from bottom - rotation handles horizontal orientation
                     let meter_y = fill_y + meter_offset + available - meter_h;
                     let meter_radius = (METER_WIDTH / 2.0).min(meter_h / 2.0);
                     let meter_color = if params.meter_invert {
@@ -139,26 +161,13 @@ impl SliderRenderer {
                         params.meter_color.map(Rgba::from).unwrap_or(COLOR_BLACK)
                     };
                     Rect::new(meter_x, meter_y, METER_WIDTH, meter_h, meter_radius)
-                        .draw_filled(&mut full, meter_color);
+                        .draw_filled(full, meter_color);
                 }
             }
         }
-
-        // Crop to half
-        let mut result = Pixmap::new(self.button_size, self.button_size)?;
-        let y_off = if is_top { 0 } else { self.button_size as usize };
-        let row_bytes = self.button_size as usize * 4;
-
-        for y in 0..self.button_size as usize {
-            let src = (y + y_off) * row_bytes;
-            let dst = y * row_bytes;
-            result.data_mut()[dst..dst + row_bytes].copy_from_slice(&full.data()[src..src + row_bytes]);
-        }
-
-        if is_horizontal { self.rotate_cw(&result) } else { Some(result) }
     }
 
-    fn rotate_cw(&self, pixmap: &Pixmap) -> Option<Pixmap> {
+    pub fn rotate_cw(&self, pixmap: &Pixmap) -> Option<Pixmap> {
         let (w, h) = (pixmap.width(), pixmap.height());
         let mut rotated = Pixmap::new(h, w)?;
         let (src, dst) = (pixmap.data(), rotated.data_mut());

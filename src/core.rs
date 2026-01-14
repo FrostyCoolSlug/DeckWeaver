@@ -1,22 +1,22 @@
-//! Core manager that orchestrates all Rust functionality
-
 use crate::action::{ActionConfig, ActionState, ActionType};
-use crate::devices::{Device, DeviceType, Status};
-use crate::render::{ButtonRenderer, KnobRenderer, RenderParams, SliderRenderer};
-
+use crate::devices::{apply_patch_op, Device, DeviceType, Status};
+use crate::render::{ButtonRenderer, KnobRenderer, RenderParams, SliderRenderer, pixmap_to_png};
 use futures_util::{SinkExt, StreamExt};
 use parking_lot::RwLock;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict};
 use serde_json::Value;
 use std::collections::HashMap;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::net::TcpStream;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
+use tiny_skia::Pixmap;
 
-const RENDER_INTERVAL: Duration = Duration::from_millis(33);
+const RENDER_INTERVAL: Duration = Duration::from_micros(33333);
 const DEFAULT_HOST: &str = "localhost";
 const DEFAULT_PORT: u16 = 14565;
 const RECONNECT_DELAY: Duration = Duration::from_secs(5);
@@ -29,10 +29,10 @@ enum Command {
     ToggleMute { device_id: String },
 }
 
-// Pending update for an action - latest image/label per action_id
 #[derive(Debug, Clone)]
 struct PendingUpdate {
     image: Option<Vec<u8>>,
+    image_hash: Option<u64>,
     label: Option<String>,
     generation: u64,
 }
@@ -45,8 +45,8 @@ pub struct DeckWeaverCore {
     actions: Arc<RwLock<HashMap<String, ActionState>>>,
     meter_data: Arc<RwLock<HashMap<String, u8>>>,
     command_tx: Arc<RwLock<Option<tokio::sync::mpsc::Sender<Command>>>>,
-    pending_updates: Arc<RwLock<HashMap<String, PendingUpdate>>>, // Shared queue for Python to poll
-    page_generation: Arc<AtomicU64>, // Track page changes to cancel stale operations
+    pending_updates: Arc<RwLock<HashMap<String, PendingUpdate>>>,
+    page_generation: Arc<AtomicU64>,
 }
 
 #[pymethods]
@@ -69,7 +69,6 @@ impl DeckWeaverCore {
         if self.running.swap(true, Ordering::SeqCst) {
             return;
         }
-        // No callback thread - Python polls pending_updates instead
         self.start_websocket_thread();
         self.start_meter_thread();
         self.start_render_thread();
@@ -100,7 +99,6 @@ impl DeckWeaverCore {
         }
     }
 
-    /// Get and clear pending updates (called by Python periodically)
     fn get_pending_updates<'a>(&self, py: Python<'a>) -> PyResult<Bound<'a, PyDict>> {
         let current_generation = self.page_generation.load(Ordering::SeqCst);
         let mut updates = self.pending_updates.write();
@@ -196,7 +194,6 @@ impl DeckWeaverCore {
     }
 
     fn clear_all_actions(&self) {
-        // Atomically clear everything and bump generation to cancel in-flight operations
         self.page_generation.fetch_add(1, Ordering::SeqCst);
         self.actions.write().clear();
         self.pending_updates.write().clear();
@@ -233,7 +230,6 @@ impl DeckWeaverCore {
                     let command_id = AtomicU64::new(0);
 
                     while running.load(Ordering::SeqCst) {
-                        // Try to connect
                         let ws = match connect_async(&url).await {
                             Ok((ws, _)) => ws,
                             Err(e) => {
@@ -246,7 +242,6 @@ impl DeckWeaverCore {
                         tracing::info!("Connected to PipeWeaver");
                         let (mut write, mut read) = ws.split();
 
-                        // Request initial status
                         let initial_id = command_id.fetch_add(1, Ordering::SeqCst);
                         let initial_request = serde_json::json!({
                             "id": initial_id,
@@ -302,6 +297,7 @@ impl DeckWeaverCore {
     fn start_meter_thread(&self) {
         let running = self.running.clone();
         let meter_data = self.meter_data.clone();
+        let actions = self.actions.clone();
 
         std::thread::Builder::new()
             .name("deckweaver-meter".into())
@@ -317,6 +313,15 @@ impl DeckWeaverCore {
                     let throttle = Duration::from_millis(33); // 30fps
 
                     while running.load(Ordering::SeqCst) {
+                        let has_meters_enabled = {
+                            let guard = actions.read();
+                            guard.values().any(|s| s.config.meters_enabled)
+                        };
+                        
+                        if !has_meters_enabled {
+                            tokio::time::sleep(Duration::from_secs(1)).await;
+                            continue;
+                        }
                         let ws = match connect_async(&url).await {
                             Ok((ws, _)) => ws,
                             Err(_) => {
@@ -329,6 +334,15 @@ impl DeckWeaverCore {
                         last_update.clear();
 
                         loop {
+                            let has_meters_enabled = {
+                                let guard = actions.read();
+                                guard.values().any(|s| s.config.meters_enabled)
+                            };
+                            
+                            if !has_meters_enabled {
+                                break;
+                            }
+
                             tokio::select! {
                                 msg = read.next() => {
                                     match msg {
@@ -339,15 +353,25 @@ impl DeckWeaverCore {
                                                         data.get("id").and_then(|v| v.as_str()),
                                                         data.get("percent").and_then(|v| v.as_u64()),
                                                     ) {
-                                                        let now = Instant::now();
-                                                        let should_update = last_update
-                                                            .get(id)
-                                                            .map(|t| now.duration_since(*t) >= throttle)
-                                                            .unwrap_or(true);
+                                                        let device_needs_meters = {
+                                                            let guard = actions.read();
+                                                            guard.values().any(|s| {
+                                                                s.config.meters_enabled &&
+                                                                s.config.device_id.as_ref().map_or(false, |did| did == id)
+                                                            })
+                                                        };
+                                                        
+                                                        if device_needs_meters {
+                                                            let now = Instant::now();
+                                                            let should_update = last_update
+                                                                .get(id)
+                                                                .map(|t| now.duration_since(*t) >= throttle)
+                                                                .unwrap_or(true);
 
-                                                        if should_update {
-                                                            last_update.insert(id.to_string(), now);
-                                                            meter_data.write().insert(id.to_string(), percent as u8);
+                                                            if should_update {
+                                                                last_update.insert(id.to_string(), now);
+                                                                meter_data.write().insert(id.to_string(), percent as u8);
+                                                            }
                                                         }
                                                     }
                                                 }
@@ -394,23 +418,17 @@ impl DeckWeaverCore {
 
                 while running.load(Ordering::SeqCst) {
                     let frame_start = Instant::now();
-                    
-                    // Check if page changed - if so, skip this frame to avoid stale renders
                     let current_generation = page_generation.load(Ordering::SeqCst);
                     if current_generation != last_generation {
                         last_generation = current_generation;
-                        // Skip rendering this frame to avoid mixing old and new page data
                         std::thread::sleep(RENDER_INTERVAL);
                         continue;
                     }
                     last_generation = current_generation;
 
                     let available = service_available.load(Ordering::Relaxed) || status.read().is_some();
-
                     let mut label_updates = Vec::new();
 
-                    // Update device info for all actions - minimize lock hold time
-                    // Clone action IDs first, then update states quickly
                     let action_ids: Vec<String> = {
                         let guard = actions.read();
                         guard.keys().cloned().collect()
@@ -418,10 +436,8 @@ impl DeckWeaverCore {
 
                     {
                         let status_guard = status.read();
-                        let meter_guard = meter_data.read();
                         let mut actions_guard = actions.write();
 
-                        // Fast iteration - only update what's needed
                         for action_id in action_ids {
                             let Some(state) = actions_guard.get_mut(&action_id) else { continue };
                             let Some(device_id) = state.config.device_id.as_ref() else { continue };
@@ -430,8 +446,13 @@ impl DeckWeaverCore {
                                 state.device = st.get_device(device_id, None);
                             }
                             
-                            if let Some(&meter) = meter_guard.get(device_id) {
-                                state.set_meter(meter);
+                            if state.config.meters_enabled {
+                                let meter_guard = meter_data.read();
+                                if let Some(&meter) = meter_guard.get(device_id) {
+                                    state.set_meter(meter);
+                                }
+                            } else {
+                                state.set_meter(0);
                             }
                             
                             if let Some(name) = state.device.as_ref().map(|d| d.name.as_str()) {
@@ -442,11 +463,9 @@ impl DeckWeaverCore {
                         }
                     }
 
-                    // Write label updates to pending_updates queue (only if changed)
                     if !label_updates.is_empty() {
                         let mut updates = pending_updates.write();
                         for (action_id, label) in label_updates {
-                            // Only update if the label actually changed
                             let should_update = updates
                                 .get(&action_id)
                                 .and_then(|u| u.label.as_ref())
@@ -455,6 +474,7 @@ impl DeckWeaverCore {
                             if should_update {
                                 let update = updates.entry(action_id).or_insert_with(|| PendingUpdate {
                                     image: None,
+                                    image_hash: None,
                                     label: None,
                                     generation: current_generation,
                                 });
@@ -464,45 +484,121 @@ impl DeckWeaverCore {
                         }
                     }
 
-                    // Collect and render
                     let tasks: Vec<_> = {
                         let guard = actions.read();
                         guard.iter()
                             .filter(|(_, s)| s.needs_render())
-                            .map(|(id, s)| (id.clone(), s.config.clone(), s.device.clone(), s.get_meter()))
+                            .map(|(id, s)| {
+                                let max_icon_size = match s.config.action_type {
+                                    ActionType::Knob => 52.0,
+                                    _ => (s.config.width as f32) * 0.5,
+                                };
+                                let cached_icon = s.get_cached_icon(
+                                    s.config.icon_png.as_deref(),
+                                    max_icon_size,
+                                );
+                                
+                                let needs_base_rebuild = if (s.config.action_type == ActionType::Knob || s.config.action_type == ActionType::Slider) && s.config.meters_enabled {
+                                    s.needs_base_rebuild()
+                                } else {
+                                    false
+                                };
+                                
+                                let cached_base = if (s.config.action_type == ActionType::Knob || s.config.action_type == ActionType::Slider) && s.config.meters_enabled && !needs_base_rebuild {
+                                    s.cached_base.read().clone()
+                                } else {
+                                    None
+                                };
+                                
+                                (id.clone(), s.config.clone(), s.device.clone(), s.get_meter(), cached_icon, cached_base, needs_base_rebuild)
+                            })
                             .collect()
                     };
 
-                    for (action_id, config, device, meter) in tasks {
-                        // Check generation again before rendering
+                    for (action_id, config, device, meter, cached_icon, cached_base, needs_base_rebuild) in tasks {
                         if page_generation.load(Ordering::SeqCst) != current_generation {
-                            break; // Page changed, skip remaining renders
+                            break;
                         }
+
+                        let cached_base = if needs_base_rebuild && (config.action_type == ActionType::Knob || config.action_type == ActionType::Slider) && config.meters_enabled {
+                            if let Some(ref dev) = device {
+                                let is_source = dev.device_type == DeviceType::Source;
+                                let color = dev.color.as_ref().map(|c| (c.red, c.green, c.blue));
+                                let params = RenderParams {
+                                    volume: dev.volume,
+                                    is_muted: dev.is_muted,
+                                    is_source,
+                                    meter_value: 0,
+                                    device_color: color,
+                                    volume_bar_color: config.volume_bar_color,
+                                    meter_color: config.meter_color,
+                                    meter_invert: config.meter_invert,
+                                    meters_enabled: config.meters_enabled,
+                                };
+                                
+                                let base_pixmap = match config.action_type {
+                                    ActionType::Knob => {
+                                        renderers.knob.render_base(&params, config.icon_png.clone(), cached_icon.as_ref())
+                                    }
+                                    ActionType::Slider => {
+                                        renderers.slider(config.width).render_base(&params)
+                                    }
+                                    _ => None,
+                                };
+                                
+                                if let Some(base_pixmap) = base_pixmap {
+                                    let guard = actions.write();
+                                    if let Some(state) = guard.get(&action_id) {
+                                        let base_hash = state.base_hash();
+                                        let cached = crate::action::CachedBaseRender {
+                                            pixmap: base_pixmap.clone(),
+                                            base_hash,
+                                        };
+                                        *state.cached_base.write() = Some(cached.clone());
+                                        drop(guard);
+                                        Some(cached)
+                                    } else {
+                                        drop(guard);
+                                        None
+                                    }
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            }
+                        } else {
+                            cached_base
+                        };
 
                         let png = if !available {
                             renderers.render_unavailable(&config)
                         } else if let Some(ref dev) = device {
-                            renderers.render(&config, dev, meter)
+                            renderers.render_with_cached(&config, dev, meter, cached_icon.as_ref(), cached_base.as_ref())
                         } else {
                             renderers.render_loading(&config)
                         };
 
                         if let Some(bytes) = png {
-                            // Write image update to pending_updates queue (only if changed)
+                            let mut hasher = DefaultHasher::new();
+                            bytes.hash(&mut hasher);
+                            let image_hash = hasher.finish();
+                            
                             let mut updates = pending_updates.write();
-                            // Only update if the image actually changed
                             let should_update = updates
                                 .get(&action_id)
-                                .and_then(|u| u.image.as_ref())
-                                .map_or(true, |existing| existing != &bytes);
+                                .and_then(|u| u.image_hash)
+                                .map_or(true, |existing_hash| existing_hash != image_hash);
                             
                             if should_update {
                                 let update = updates.entry(action_id).or_insert_with(|| PendingUpdate {
                                     image: None,
+                                    image_hash: None,
                                     label: None,
                                     generation: current_generation,
                                 });
                                 update.image = Some(bytes);
+                                update.image_hash = Some(image_hash);
                                 update.generation = current_generation;
                             }
                         }
@@ -560,7 +656,14 @@ fn handle_ws_message(text: &str, status: &Arc<RwLock<Option<Status>>>) {
 
     if let Some(status_data) = response.get("data").and_then(|d| d.get("Status")) {
         if let Ok(new_status) = serde_json::from_value::<Status>(status_data.clone()) {
-            *status.write() = Some(new_status);
+            let mut status_guard = status.write();
+            if let Some(ref mut s) = *status_guard {
+                s.rebuild_index();
+            } else {
+                let s = new_status;
+                s.rebuild_index();
+                *status_guard = Some(s);
+            }
         } else {
             tracing::warn!("Failed to deserialize Status");
         }
@@ -588,13 +691,15 @@ fn apply_patch(status: &Arc<RwLock<Option<Status>>>, patch: &[Value]) {
     };
 
     for op in patch {
-        if let Err(e) = crate::client::apply_patch_op(&mut value, op) {
+        if let Err(e) = apply_patch_op(&mut value, op) {
             tracing::warn!("Failed to apply patch operation: {}", e);
         }
     }
     
     if let Ok(new_status) = serde_json::from_value::<Status>(value) {
-        *current = new_status;
+        let s = new_status;
+        s.rebuild_index();
+        *current = s;
     } else {
         tracing::error!("Failed to deserialize status after patch");
     }
@@ -687,7 +792,8 @@ impl Renderers {
         }
     }
 
-    fn render(&mut self, config: &ActionConfig, device: &Device, meter_value: u8) -> Option<Vec<u8>> {
+
+    fn render_with_cached(&mut self, config: &ActionConfig, device: &Device, meter_value: u8, cached_icon: Option<&crate::action::CachedIcon>, cached_base: Option<&crate::action::CachedBaseRender>) -> Option<Vec<u8>> {
         let is_source = device.device_type == DeviceType::Source;
         let color = device.color.as_ref().map(|c| (c.red, c.green, c.blue));
 
@@ -704,7 +810,15 @@ impl Renderers {
                     meter_invert: config.meter_invert,
                     meters_enabled: config.meters_enabled,
                 };
-                self.knob.render_internal_png(&params, config.icon_png.clone())
+                if let Some(cached_base) = cached_base {
+                    let mut pixmap = cached_base.pixmap.clone();
+                    self.knob.render_meter_overlay(&mut pixmap, &params);
+                    pixmap_to_png(&pixmap)
+                } else if let Some(cached) = cached_icon {
+                    self.knob.render_internal_png_with_cached(&params, Some(cached))
+                } else {
+                    self.knob.render_internal_png(&params, config.icon_png.clone())
+                }
             }
             ActionType::Slider => {
                 let params = RenderParams {
@@ -718,19 +832,43 @@ impl Renderers {
                     meter_invert: config.meter_invert,
                     meters_enabled: config.meters_enabled,
                 };
-                self.slider(config.width).render_internal_png(&params, config.is_top, config.orientation == "horizontal")
+                if let Some(cached_base) = cached_base {
+                    let mut full = cached_base.pixmap.clone();
+                    self.slider(config.width).render_meter_overlay(&mut full, &params);
+                    
+                    let mut result = Pixmap::new(config.width, config.width)?;
+                    let y_off = if config.is_top { 0 } else { config.width as usize };
+                    let row_bytes = config.width as usize * 4;
+                    
+                    for y in 0..config.width as usize {
+                        let src = (y + y_off) * row_bytes;
+                        let dst = y * row_bytes;
+                        result.data_mut()[dst..dst + row_bytes].copy_from_slice(&full.data()[src..src + row_bytes]);
+                    }
+                    
+                    let is_horizontal = config.orientation == "horizontal";
+                    if is_horizontal {
+                        self.slider(config.width).rotate_cw(&result).and_then(|r| pixmap_to_png(&r))
+                    } else {
+                        pixmap_to_png(&result)
+                    }
+                } else {
+                    self.slider(config.width).render_internal_png(&params, config.is_top, config.orientation == "horizontal")
+                }
             }
             ActionType::Button => {
-                // Negative values = volume down (minus), positive values = volume up (plus)
-                // Zero = mute button
                 let is_plus = if config.volume_step == 0 {
-                    None // Mute button
+                    None
                 } else if config.volume_step > 0 {
-                    Some(true) // Plus button
+                    Some(true)
                 } else {
-                    Some(false) // Minus button
+                    Some(false)
                 };
-                self.button(config.width).render_internal_png(is_plus, config.icon_png.clone(), device.is_muted)
+                if let Some(cached) = cached_icon {
+                    self.button(config.width).render_internal_png_with_cached(is_plus, Some(cached), device.is_muted)
+                } else {
+                    self.button(config.width).render_internal_png(is_plus, config.icon_png.clone(), device.is_muted)
+                }
             }
         }
     }
