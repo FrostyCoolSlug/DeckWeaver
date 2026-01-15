@@ -47,7 +47,7 @@ impl SliderRenderer {
         meter_color: Option<(u8, u8, u8, u8)>,
         meter_invert: bool,
         meters_enabled: bool,
-    ) -> PyResult<Vec<u8>> {
+    ) -> PyResult<(Vec<u8>, u32, u32)> {
         let params = RenderParams {
             volume, is_muted: false, is_source, meter_value, device_color,
             volume_bar_color, meter_color, meter_invert, meters_enabled,
@@ -55,31 +55,31 @@ impl SliderRenderer {
         self.encode_pixmap(self.render_internal(&params, is_top, is_horizontal))
     }
 
-    pub fn render_unavailable(&self) -> PyResult<Vec<u8>> {
+    pub fn render_unavailable(&self) -> PyResult<(Vec<u8>, u32, u32)> {
         self.encode_pixmap(create_filled_pixmap(self.button_size, self.button_size, COLOR_SERVICE_UNAVAILABLE_BG))
     }
 
-    pub fn render_loading(&self) -> PyResult<Vec<u8>> {
+    pub fn render_loading(&self) -> PyResult<(Vec<u8>, u32, u32)> {
         self.encode_pixmap(create_filled_pixmap(self.button_size, self.button_size, COLOR_TRANSPARENT))
     }
 }
 
 impl SliderRenderer {
-    fn encode_pixmap(&self, pixmap: Option<Pixmap>) -> PyResult<Vec<u8>> {
+    fn encode_pixmap(&self, pixmap: Option<Pixmap>) -> PyResult<(Vec<u8>, u32, u32)> {
         let pixmap = pixmap.ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("Failed to render"))?;
-        pixmap_to_png(&pixmap).ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("Failed to encode PNG"))
+        pixmap_to_rgba(&pixmap).ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("Failed to encode RGBA"))
     }
 
-    pub fn render_internal_png(&self, params: &RenderParams, is_top: bool, is_horizontal: bool) -> Option<Vec<u8>> {
-        pixmap_to_png(&self.render_internal(params, is_top, is_horizontal)?)
+    pub fn render_internal_png(&self, params: &RenderParams, is_top: bool, is_horizontal: bool) -> Option<(Vec<u8>, u32, u32)> {
+        pixmap_to_rgba(&self.render_internal(params, is_top, is_horizontal)?)
     }
 
-    pub fn render_unavailable_internal(&self) -> Option<Vec<u8>> {
-        pixmap_to_png(&create_filled_pixmap(self.button_size, self.button_size, COLOR_SERVICE_UNAVAILABLE_BG)?)
+    pub fn render_unavailable_internal(&self) -> Option<(Vec<u8>, u32, u32)> {
+        pixmap_to_rgba(&create_filled_pixmap(self.button_size, self.button_size, COLOR_SERVICE_UNAVAILABLE_BG)?)
     }
 
-    pub fn render_loading_internal(&self) -> Option<Vec<u8>> {
-        pixmap_to_png(&create_filled_pixmap(self.button_size, self.button_size, COLOR_TRANSPARENT)?)
+    pub fn render_loading_internal(&self) -> Option<(Vec<u8>, u32, u32)> {
+        pixmap_to_rgba(&create_filled_pixmap(self.button_size, self.button_size, COLOR_TRANSPARENT)?)
     }
 
     fn render_internal(&self, params: &RenderParams, is_top: bool, is_horizontal: bool) -> Option<Pixmap> {

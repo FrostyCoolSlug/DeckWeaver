@@ -25,44 +25,44 @@ impl ButtonRenderer {
     }
 
     #[pyo3(signature = (is_plus=None, icon_png=None, is_muted=false))]
-    pub fn render(&self, is_plus: Option<bool>, icon_png: Option<Vec<u8>>, is_muted: bool) -> PyResult<Vec<u8>> {
+    pub fn render(&self, is_plus: Option<bool>, icon_png: Option<Vec<u8>>, is_muted: bool) -> PyResult<(Vec<u8>, u32, u32)> {
         let pixmap = self
             .render_internal(is_plus, icon_png, None, is_muted)
             .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("Failed to render"))?;
 
-        pixmap_to_png(&pixmap)
-            .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("Failed to encode PNG"))
+        pixmap_to_rgba(&pixmap)
+            .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("Failed to encode RGBA"))
     }
 
-    pub fn render_unavailable(&self) -> PyResult<Vec<u8>> {
+    pub fn render_unavailable(&self) -> PyResult<(Vec<u8>, u32, u32)> {
         self.encode_pixmap(create_filled_pixmap(self.button_size, self.button_size, COLOR_SERVICE_UNAVAILABLE_BG))
     }
 
-    pub fn render_loading(&self) -> PyResult<Vec<u8>> {
+    pub fn render_loading(&self) -> PyResult<(Vec<u8>, u32, u32)> {
         self.encode_pixmap(create_filled_pixmap(self.button_size, self.button_size, COLOR_TRANSPARENT))
     }
 }
 
 impl ButtonRenderer {
-    fn encode_pixmap(&self, pixmap: Option<Pixmap>) -> PyResult<Vec<u8>> {
+    fn encode_pixmap(&self, pixmap: Option<Pixmap>) -> PyResult<(Vec<u8>, u32, u32)> {
         let pixmap = pixmap.ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("Failed to render"))?;
-        pixmap_to_png(&pixmap).ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("Failed to encode PNG"))
+        pixmap_to_rgba(&pixmap).ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("Failed to encode RGBA"))
     }
 
-    pub fn render_internal_png(&self, is_plus: Option<bool>, icon_png: Option<Vec<u8>>, is_muted: bool) -> Option<Vec<u8>> {
-        pixmap_to_png(&self.render_internal(is_plus, icon_png, None, is_muted)?)
+    pub fn render_internal_png(&self, is_plus: Option<bool>, icon_png: Option<Vec<u8>>, is_muted: bool) -> Option<(Vec<u8>, u32, u32)> {
+        pixmap_to_rgba(&self.render_internal(is_plus, icon_png, None, is_muted)?)
     }
 
-    pub fn render_internal_png_with_cached(&self, is_plus: Option<bool>, cached_icon: Option<&crate::action::CachedIcon>, is_muted: bool) -> Option<Vec<u8>> {
-        pixmap_to_png(&self.render_internal(is_plus, None, cached_icon, is_muted)?)
+    pub fn render_internal_png_with_cached(&self, is_plus: Option<bool>, cached_icon: Option<&crate::action::CachedIcon>, is_muted: bool) -> Option<(Vec<u8>, u32, u32)> {
+        pixmap_to_rgba(&self.render_internal(is_plus, None, cached_icon, is_muted)?)
     }
 
-    pub fn render_unavailable_internal(&self) -> Option<Vec<u8>> {
-        pixmap_to_png(&create_filled_pixmap(self.button_size, self.button_size, COLOR_SERVICE_UNAVAILABLE_BG)?)
+    pub fn render_unavailable_internal(&self) -> Option<(Vec<u8>, u32, u32)> {
+        pixmap_to_rgba(&create_filled_pixmap(self.button_size, self.button_size, COLOR_SERVICE_UNAVAILABLE_BG)?)
     }
 
-    pub fn render_loading_internal(&self) -> Option<Vec<u8>> {
-        pixmap_to_png(&create_filled_pixmap(self.button_size, self.button_size, COLOR_TRANSPARENT)?)
+    pub fn render_loading_internal(&self) -> Option<(Vec<u8>, u32, u32)> {
+        pixmap_to_rgba(&create_filled_pixmap(self.button_size, self.button_size, COLOR_TRANSPARENT)?)
     }
 
     fn render_internal(&self, is_plus: Option<bool>, icon_png: Option<Vec<u8>>, cached_icon: Option<&crate::action::CachedIcon>, is_muted: bool) -> Option<Pixmap> {

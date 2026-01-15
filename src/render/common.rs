@@ -184,8 +184,10 @@ pub fn draw_diagonal_line(pixmap: &mut Pixmap, x1: f32, y1: f32, x2: f32, y2: f3
     stroke_line(pixmap, x1, y1, x2, y2, width, color);
 }
 
-pub fn pixmap_to_png(pixmap: &Pixmap) -> Option<Vec<u8>> {
-    pixmap.encode_png().ok()
+/// Convert Pixmap to raw RGBA bytes (no PNG encoding - much faster!)
+pub fn pixmap_to_rgba(pixmap: &Pixmap) -> Option<(Vec<u8>, u32, u32)> {
+    let data = pixmap.data();
+    Some((data.to_vec(), pixmap.width(), pixmap.height()))
 }
 
 pub fn create_filled_pixmap(width: u32, height: u32, color: Rgba) -> Option<Pixmap> {

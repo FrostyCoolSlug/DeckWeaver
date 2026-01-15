@@ -50,7 +50,7 @@ impl KnobRenderer {
         meter_invert: bool,
         meters_enabled: bool,
         icon_png: Option<Vec<u8>>,
-    ) -> PyResult<Vec<u8>> {
+    ) -> PyResult<(Vec<u8>, u32, u32)> {
         let params = RenderParams {
             volume, is_muted, is_source, meter_value, device_color,
             volume_bar_color, meter_color, meter_invert, meters_enabled,
@@ -58,35 +58,35 @@ impl KnobRenderer {
         self.encode_pixmap(self.render_internal(&params, icon_png, None))
     }
 
-    pub fn render_unavailable(&self) -> PyResult<Vec<u8>> {
+    pub fn render_unavailable(&self) -> PyResult<(Vec<u8>, u32, u32)> {
         self.encode_pixmap(create_filled_pixmap(self.width, self.height, COLOR_SERVICE_UNAVAILABLE_BG))
     }
 
-    pub fn render_loading(&self) -> PyResult<Vec<u8>> {
+    pub fn render_loading(&self) -> PyResult<(Vec<u8>, u32, u32)> {
         self.encode_pixmap(create_filled_pixmap(self.width, self.height, COLOR_TRANSPARENT))
     }
 }
 
 impl KnobRenderer {
-    fn encode_pixmap(&self, pixmap: Option<Pixmap>) -> PyResult<Vec<u8>> {
+    fn encode_pixmap(&self, pixmap: Option<Pixmap>) -> PyResult<(Vec<u8>, u32, u32)> {
         let pixmap = pixmap.ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("Failed to render"))?;
-        pixmap_to_png(&pixmap).ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("Failed to encode PNG"))
+        pixmap_to_rgba(&pixmap).ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("Failed to encode RGBA"))
     }
 
-    pub fn render_internal_png(&self, params: &RenderParams, icon_png: Option<Vec<u8>>) -> Option<Vec<u8>> {
-        pixmap_to_png(&self.render_internal(params, icon_png, None)?)
+    pub fn render_internal_png(&self, params: &RenderParams, icon_png: Option<Vec<u8>>) -> Option<(Vec<u8>, u32, u32)> {
+        pixmap_to_rgba(&self.render_internal(params, icon_png, None)?)
     }
 
-    pub fn render_internal_png_with_cached(&self, params: &RenderParams, cached_icon: Option<&crate::action::CachedIcon>) -> Option<Vec<u8>> {
-        pixmap_to_png(&self.render_internal(params, None, cached_icon)?)
+    pub fn render_internal_png_with_cached(&self, params: &RenderParams, cached_icon: Option<&crate::action::CachedIcon>) -> Option<(Vec<u8>, u32, u32)> {
+        pixmap_to_rgba(&self.render_internal(params, None, cached_icon)?)
     }
 
-    pub fn render_unavailable_internal(&self) -> Option<Vec<u8>> {
-        pixmap_to_png(&create_filled_pixmap(self.width, self.height, COLOR_SERVICE_UNAVAILABLE_BG)?)
+    pub fn render_unavailable_internal(&self) -> Option<(Vec<u8>, u32, u32)> {
+        pixmap_to_rgba(&create_filled_pixmap(self.width, self.height, COLOR_SERVICE_UNAVAILABLE_BG)?)
     }
 
-    pub fn render_loading_internal(&self) -> Option<Vec<u8>> {
-        pixmap_to_png(&create_filled_pixmap(self.width, self.height, COLOR_TRANSPARENT)?)
+    pub fn render_loading_internal(&self) -> Option<(Vec<u8>, u32, u32)> {
+        pixmap_to_rgba(&create_filled_pixmap(self.width, self.height, COLOR_TRANSPARENT)?)
     }
 
     fn render_internal(&self, params: &RenderParams, icon_png: Option<Vec<u8>>, cached_icon: Option<&crate::action::CachedIcon>) -> Option<Pixmap> {
@@ -104,7 +104,6 @@ impl KnobRenderer {
         let mut pixmap = Pixmap::new(self.width, self.height)?;
         fill_background(&mut pixmap, COLOR_TRANSPARENT);
 
-        // Layout
         let icon_x = CORNER_INSET;
         let icon_y = h - ICON_MAX_SIZE - CORNER_INSET;
         let bar_x = icon_x + ICON_MAX_SIZE + EDGE_PADDING;
@@ -183,7 +182,6 @@ impl KnobRenderer {
             (x + (ICON_MAX_SIZE - sw as f32) / 2.0) as i32,
             (y + (ICON_MAX_SIZE - sh as f32) / 2.0) as i32,
         );
-        // Alpha-blend each pixel
         for (ix, iy, pixel) in rgba8.enumerate_pixels() {
             let (px, py) = (fx + ix as i32, fy + iy as i32);
             if px < 0 || py < 0 || px >= self.width as i32 || py >= self.height as i32 {

@@ -1,6 +1,6 @@
 use crate::action::{ActionConfig, ActionState, ActionType};
 use crate::devices::{apply_patch_op, Device, DeviceType, Status};
-use crate::render::{ButtonRenderer, KnobRenderer, RenderParams, SliderRenderer, pixmap_to_png};
+use crate::render::{ButtonRenderer, KnobRenderer, RenderParams, SliderRenderer, pixmap_to_rgba};
 use futures_util::{SinkExt, StreamExt};
 use parking_lot::RwLock;
 use pyo3::prelude::*;
@@ -31,7 +31,9 @@ enum Command {
 
 #[derive(Debug, Clone)]
 struct PendingUpdate {
-    image: Option<Vec<u8>>,
+    image: Option<Vec<u8>>, // Raw RGBA bytes
+    width: Option<u32>,
+    height: Option<u32>,
     image_hash: Option<u64>,
     label: Option<String>,
     generation: u64,
@@ -115,6 +117,12 @@ impl DeckWeaverCore {
             let entry = PyDict::new(py);
             if let Some(bytes) = &update.image {
                 entry.set_item("image", PyBytes::new(py, bytes))?;
+                if let Some(w) = update.width {
+                    entry.set_item("width", w)?;
+                }
+                if let Some(h) = update.height {
+                    entry.set_item("height", h)?;
+                }
             } else {
                 entry.set_item("image", py.None())?;
             }
@@ -474,6 +482,8 @@ impl DeckWeaverCore {
                             if should_update {
                                 let update = updates.entry(action_id).or_insert_with(|| PendingUpdate {
                                     image: None,
+                                    width: None,
+                                    height: None,
                                     image_hash: None,
                                     label: None,
                                     generation: current_generation,
@@ -571,7 +581,7 @@ impl DeckWeaverCore {
                             cached_base
                         };
 
-                        let png = if !available {
+                        let result = if !available {
                             renderers.render_unavailable(&config)
                         } else if let Some(ref dev) = device {
                             renderers.render_with_cached(&config, dev, meter, cached_icon.as_ref(), cached_base.as_ref())
@@ -579,7 +589,7 @@ impl DeckWeaverCore {
                             renderers.render_loading(&config)
                         };
 
-                        if let Some(bytes) = png {
+                        if let Some((bytes, width, height)) = result {
                             let mut hasher = DefaultHasher::new();
                             bytes.hash(&mut hasher);
                             let image_hash = hasher.finish();
@@ -593,11 +603,15 @@ impl DeckWeaverCore {
                             if should_update {
                                 let update = updates.entry(action_id).or_insert_with(|| PendingUpdate {
                                     image: None,
+                                    width: None,
+                                    height: None,
                                     image_hash: None,
                                     label: None,
                                     generation: current_generation,
                                 });
                                 update.image = Some(bytes);
+                                update.width = Some(width);
+                                update.height = Some(height);
                                 update.image_hash = Some(image_hash);
                                 update.generation = current_generation;
                             }
@@ -776,7 +790,7 @@ impl Renderers {
         self.buttons.entry(width).or_insert_with(|| ButtonRenderer::new(width))
     }
 
-    fn render_unavailable(&mut self, config: &ActionConfig) -> Option<Vec<u8>> {
+    fn render_unavailable(&mut self, config: &ActionConfig) -> Option<(Vec<u8>, u32, u32)> {
         match config.action_type {
             ActionType::Knob => self.knob.render_unavailable_internal(),
             ActionType::Slider => self.slider(config.width).render_unavailable_internal(),
@@ -784,7 +798,7 @@ impl Renderers {
         }
     }
 
-    fn render_loading(&mut self, config: &ActionConfig) -> Option<Vec<u8>> {
+    fn render_loading(&mut self, config: &ActionConfig) -> Option<(Vec<u8>, u32, u32)> {
         match config.action_type {
             ActionType::Knob => self.knob.render_loading_internal(),
             ActionType::Slider => self.slider(config.width).render_loading_internal(),
@@ -793,7 +807,7 @@ impl Renderers {
     }
 
 
-    fn render_with_cached(&mut self, config: &ActionConfig, device: &Device, meter_value: u8, cached_icon: Option<&crate::action::CachedIcon>, cached_base: Option<&crate::action::CachedBaseRender>) -> Option<Vec<u8>> {
+    fn render_with_cached(&mut self, config: &ActionConfig, device: &Device, meter_value: u8, cached_icon: Option<&crate::action::CachedIcon>, cached_base: Option<&crate::action::CachedBaseRender>) -> Option<(Vec<u8>, u32, u32)> {
         let is_source = device.device_type == DeviceType::Source;
         let color = device.color.as_ref().map(|c| (c.red, c.green, c.blue));
 
@@ -813,7 +827,7 @@ impl Renderers {
                 if let Some(cached_base) = cached_base {
                     let mut pixmap = cached_base.pixmap.clone();
                     self.knob.render_meter_overlay(&mut pixmap, &params);
-                    pixmap_to_png(&pixmap)
+                    pixmap_to_rgba(&pixmap)
                 } else if let Some(cached) = cached_icon {
                     self.knob.render_internal_png_with_cached(&params, Some(cached))
                 } else {
@@ -848,9 +862,9 @@ impl Renderers {
                     
                     let is_horizontal = config.orientation == "horizontal";
                     if is_horizontal {
-                        self.slider(config.width).rotate_cw(&result).and_then(|r| pixmap_to_png(&r))
+                        self.slider(config.width).rotate_cw(&result).and_then(|r| pixmap_to_rgba(&r))
                     } else {
-                        pixmap_to_png(&result)
+                        pixmap_to_rgba(&result)
                     }
                 } else {
                     self.slider(config.width).render_internal_png(&params, config.is_top, config.orientation == "horizontal")

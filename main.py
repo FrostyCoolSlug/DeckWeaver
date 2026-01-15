@@ -56,7 +56,9 @@ def _poll_updates() -> bool:
             if image_cb is not None and "image" in update_dict:
                 image_data = update_dict["image"]
                 if image_data is not None:
-                    image_cb(image_data)
+                    width = update_dict.get("width")
+                    height = update_dict.get("height")
+                    image_cb(image_data, width, height)
             
             # Process label update
             if label_cb is not None and "label" in update_dict:
@@ -351,11 +353,16 @@ class BaseAction(ActionBase):
         config = self._build_config()
         self._core.update_action(self._action_id, config)
 
-    def _on_image_update(self, png_bytes: bytes):
+    def _on_image_update(self, rgba_bytes: bytes, width: Optional[int], height: Optional[int]):
         """Called when a new image is ready for this action (from polling)"""
         def update():
             try:
-                image = Image.open(BytesIO(png_bytes))
+                if width is not None and height is not None:
+                    # Raw RGBA bytes - much faster than PNG decode!
+                    image = Image.frombytes("RGBA", (width, height), rgba_bytes, "raw", "RGBA", 0, 1)
+                else:
+                    # Fallback: try to decode as PNG (shouldn't happen)
+                    image = Image.open(BytesIO(rgba_bytes))
                 self.set_media(image=image, update=True)
                 if inp := self.get_input():
                     inp.update()

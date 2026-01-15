@@ -36,6 +36,7 @@ pipeweaver-shared = { git = "https://github.com/pipeweaver/pipeweaver" }
 tiny-skia = "0.11"
 resvg = "0.45"
 image = "0.25"
+imageproc = "0.25"
 
 # Utilities
 parking_lot = "0.12"
