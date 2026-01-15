@@ -13,6 +13,13 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
+# Activate virtual environment if it exists
+if [ -d "venv" ]; then
+    source venv/bin/activate
+elif [ -d ".venv" ]; then
+    source .venv/bin/activate
+fi
+
 # Parse command line argument
 PROFILE="${1:-release}"
 
@@ -40,8 +47,13 @@ else
     TARGET_SUBDIR="debug"
 fi
 
-# Detect Python extension suffix
-PYTHON_EXT_SUFFIX=$(python3 -c "import sysconfig; print(sysconfig.get_config_var('EXT_SUFFIX') or sysconfig.get_config_var('SO'))")
+# Detect Python extension suffix (use Python from venv if active, otherwise system python3)
+if [ -n "$VIRTUAL_ENV" ]; then
+    PYTHON_CMD="$VIRTUAL_ENV/bin/python"
+else
+    PYTHON_CMD="python3"
+fi
+PYTHON_EXT_SUFFIX=$($PYTHON_CMD -c "import sysconfig; print(sysconfig.get_config_var('EXT_SUFFIX') or sysconfig.get_config_var('SO'))")
 TARGET_NAME="_core${PYTHON_EXT_SUFFIX}"
 TARGET_DIR="deckweaver"
 SOURCE_LIB="target/${TARGET_SUBDIR}/libdeckweaver.so"
