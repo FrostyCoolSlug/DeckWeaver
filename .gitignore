@@ -101,11 +101,15 @@ celerybeat.pid
 # Environments
 .env
 .venv
+.venv-*
 env/
 venv/
 ENV/
 env.bak/
 venv.bak/
+
+# Installed Python versions
+.python-versions/
 
 # Spyder project settings
 .spyderproject
