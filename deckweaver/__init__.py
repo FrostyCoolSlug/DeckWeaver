@@ -1,74 +1,36 @@
 """DeckWeaver - Stream Deck plugin for PipeWeaver audio control"""
 
+import importlib.util
 import sys
-import sysconfig
-from importlib import import_module
 from pathlib import Path
 
-# Detect the correct extension module based on Python version
-def _load_core_module():
-    """Load the correct _core module based on the current Python version."""
-    # Get the extension suffix for this Python version (includes .so extension)
-    ext_suffix = sysconfig.get_config_var('EXT_SUFFIX') or sysconfig.get_config_var('SO')
-    
-    # Construct the module filename with the extension suffix
-    # e.g., _core.cpython-312-x86_64-linux-gnu.so
-    module_filename = f"_core{ext_suffix}"
-    
-    # Get the directory where this __init__.py is located
-    package_dir = Path(__file__).parent
-    module_file = package_dir / module_filename
-    
-    # Try to import the version-specific module using importlib
-    if module_file.exists():
-        try:
-            import importlib.util
-            spec = importlib.util.spec_from_file_location("deckweaver._core", module_file)
+def _load_core():
+    """Load the _core extension module (abi3 or version-specific)."""
+    pkg = Path(__file__).parent
+    candidates = [
+        pkg / "_core.abi3.so",  # abi3 build (works on Python 3.11+)
+        pkg / f"_core{sys.implementation.cache_tag.replace('cpython', '.cpython')}-{sys.platform}.so",
+    ]
+    # Also try any _core*.so as fallback
+    candidates.extend(sorted(pkg.glob("_core*.so")))
+
+    for path in candidates:
+        if path.exists():
+            spec = importlib.util.spec_from_file_location("deckweaver._core", path)
             if spec and spec.loader:
-                module = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(module)
-                return module
-        except Exception as e:
-            # If loading fails, continue to fallback options
-            pass
-    
-    # Fallback 1: try importing _core directly (for backward compatibility)
-    # This works if there's only one _core*.so file or if Python can auto-detect it
-    try:
-        from . import _core
-        return _core
-    except ImportError:
-        pass
-    
-    # Fallback 2: try to find any _core*.so file and load it
-    # This is useful if the extension suffix doesn't match exactly
-    available_modules = list(package_dir.glob("_core*.so"))
-    if available_modules:
-        # Try the first available module as a last resort
-        try:
-            import importlib.util
-            spec = importlib.util.spec_from_file_location("deckweaver._core", available_modules[0])
-            if spec and spec.loader:
-                module = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(module)
-                return module
-        except Exception:
-            pass
-    
-    # If all imports fail, raise an informative error
-    available_names = [f.name for f in available_modules] if available_modules else []
-    
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                return mod
+
+    available = [p.name for p in pkg.glob("_core*.so")]
     raise ImportError(
-        f"Could not find compatible _core module for Python {sys.version_info.major}.{sys.version_info.minor}.\n"
-        f"Expected module: {module_filename}\n"
-        f"Available modules: {available_names if available_names else 'none'}\n"
-        f"Please run './build.sh all' to build extension modules for all Python versions."
+        f"No compatible _core module for Python {sys.version_info.major}.{sys.version_info.minor}.\n"
+        f"Available: {available or 'none'}. Build with: ./build.sh release  or  pip install."
     )
 
-# Load the core module
-_core = _load_core_module()
+_core = _load_core()
 
-# Import all the public API from the core module
+# Re-export public API
 VERSION = _core.VERSION
 DEFAULT_PORT = _core.DEFAULT_PORT
 DeckWeaverCore = _core.DeckWeaverCore

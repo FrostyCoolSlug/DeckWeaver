@@ -30,6 +30,15 @@ PipeWeaver is a virtual audio routing system that allows you to create and manag
 - **Volume Bar Color**: Customize volume bar color or use device color
 - **Persistent Settings**: Device selections and configurations are saved automatically
 
+## Building (developers)
+
+The Rust extension is built once and works on **any Python 3.11+** (abi3 / stable ABI). No need to match a specific minor version.
+
+- **Option 1:** `./build.sh release` — builds and copies `deckweaver/_core.abi3.so` (requires Rust/cargo).
+- **Option 2:** `pip install .` — builds the extension for the current Python (requires Rust and maturin).
+
+**Version:** Set once in `Cargo.toml` (`[package] version`). The build script syncs it to `pyproject.toml` and `manifest.json`. The plugin uses it at runtime via the Rust extension.
+
 ## Requirements
 
 - **StreamController**: 1.5.0-beta.12 or later

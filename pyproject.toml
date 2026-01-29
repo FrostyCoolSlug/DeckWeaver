@@ -1,0 +1,18 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "deckweaver"
+version = "0.4.1"
+description = "Stream Deck plugin for PipeWeaver audio control"
+readme = "README.md"
+license = { text = "GPL-2.0-only" }
+authors = [{ name = "DesignGears" }]
+requires-python = ">=3.11"
+
+[tool.maturin]
+# Extension is _core (pymodule name), not deckweaver (crate name).
+module-name = "deckweaver._core"
+# pip install . builds the extension for the active Python (version-agnostic at install time).
+# With abi3 in Cargo.toml, one .so works across Python 3.11+.
