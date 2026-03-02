@@ -1,15 +1,11 @@
 use parking_lot::RwLock;
+use pipeweaver_profile::{
+    Devices, PhysicalSourceDevice, PhysicalTargetDevice, VirtualSourceDevice, VirtualTargetDevice,
+};
+use pipeweaver_shared::MuteTarget;
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use pipeweaver_profile::{
-    Devices,
-    VirtualSourceDevice,
-    PhysicalSourceDevice,
-    VirtualTargetDevice,
-    PhysicalTargetDevice,
-};
-use pipeweaver_shared::MuteTarget;
 
 #[pyclass]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -170,7 +166,6 @@ impl Status {
         *self.device_index.write() = Some(index);
     }
 
-
     pub fn get_sources(&self) -> Vec<Device> {
         let tree = self.devices_tree();
         let mut devices = Vec::new();
@@ -221,7 +216,7 @@ impl Status {
                 self.rebuild_index();
             }
         }
-        
+
         let index_guard = self.device_index.read();
         if let Some(ref index) = *index_guard {
             index.get(device_id).and_then(|d| {
@@ -263,7 +258,8 @@ impl Status {
         let id = description.id.to_string();
         let name = description.name.clone();
 
-        let volume_val = volumes.volume
+        let volume_val = volumes
+            .volume
             .iter()
             .find(|(k, _)| format!("{:?}", k).contains("A"))
             .map(|(_, &v)| v)
@@ -274,9 +270,7 @@ impl Status {
             volume_val
         };
 
-        let is_muted = mute_states
-            .mute_state
-            .contains(&MuteTarget::TargetA);
+        let is_muted = mute_states.mute_state.contains(&MuteTarget::TargetA);
 
         let color = Some(DeviceColor {
             red: description.colour.red,
@@ -330,7 +324,10 @@ impl Status {
     }
 }
 
-pub(crate) fn apply_patch_op(doc: &mut serde_json::Value, op: &serde_json::Value) -> Result<(), String> {
+pub(crate) fn apply_patch_op(
+    doc: &mut serde_json::Value,
+    op: &serde_json::Value,
+) -> Result<(), String> {
     let operation = op.get("op").and_then(|v| v.as_str()).ok_or("Missing op")?;
     let path = op
         .get("path")
@@ -340,7 +337,7 @@ pub(crate) fn apply_patch_op(doc: &mut serde_json::Value, op: &serde_json::Value
     let (parent, key) = resolve_pointer_parent(doc, path)?;
 
     match operation {
-        "add" | "replace" => {
+        "add" => {
             let value = op.get("value").cloned().ok_or("Missing value")?;
             match parent {
                 serde_json::Value::Array(arr) => {
@@ -348,11 +345,10 @@ pub(crate) fn apply_patch_op(doc: &mut serde_json::Value, op: &serde_json::Value
                         arr.push(value);
                     } else {
                         let idx: usize = key.parse().map_err(|_| "Invalid array index")?;
-                        if idx >= arr.len() {
-                            arr.push(value);
-                        } else {
-                            arr[idx] = value;
+                        if idx > arr.len() {
+                            return Err("Array index out of bounds".into());
                         }
+                        arr.insert(idx, value);
                     }
                 }
                 serde_json::Value::Object(obj) => {
@@ -361,15 +357,37 @@ pub(crate) fn apply_patch_op(doc: &mut serde_json::Value, op: &serde_json::Value
                 _ => return Err("Parent is not a container".into()),
             }
         }
+        "replace" => {
+            let value = op.get("value").cloned().ok_or("Missing value")?;
+            match parent {
+                serde_json::Value::Array(arr) => {
+                    let idx: usize = key.parse().map_err(|_| "Invalid array index")?;
+                    if idx >= arr.len() {
+                        return Err("Array index out of bounds".into());
+                    }
+                    arr[idx] = value;
+                }
+                serde_json::Value::Object(obj) => {
+                    if !obj.contains_key(&key) {
+                        return Err("Object key not found".into());
+                    }
+                    obj.insert(key, value);
+                }
+                _ => return Err("Parent is not a container".into()),
+            }
+        }
         "remove" => match parent {
             serde_json::Value::Array(arr) => {
                 let idx: usize = key.parse().map_err(|_| "Invalid array index")?;
-                if idx < arr.len() {
-                    arr.remove(idx);
+                if idx >= arr.len() {
+                    return Err("Array index out of bounds".into());
                 }
+                arr.remove(idx);
             }
             serde_json::Value::Object(obj) => {
-                obj.remove(&key);
+                if obj.remove(&key).is_none() {
+                    return Err("Object key not found".into());
+                }
             }
             _ => return Err("Parent is not a container".into()),
         },
@@ -408,7 +426,7 @@ fn resolve_pointer_parent<'a>(
                 let idx: usize = part.parse().map_err(|_| "Invalid array index")?;
                 arr.get_mut(idx).ok_or("Array index out of bounds")?
             }
-            serde_json::Value::Object(obj) => obj.entry(part.as_str()).or_insert(serde_json::Value::Object(Default::default())),
+            serde_json::Value::Object(obj) => obj.get_mut(part).ok_or("Object key not found")?,
             _ => return Err("Cannot traverse non-container".into()),
         };
     }
@@ -419,6 +437,7 @@ fn resolve_pointer_parent<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn test_device_type() {
@@ -430,5 +449,41 @@ mod tests {
     fn test_device_color_rgba() {
         let color = DeviceColor::new(100, 150, 200);
         assert_eq!(color.rgba(), (100, 150, 200, 255));
+    }
+
+    #[test]
+    fn test_patch_add_array_inserts() {
+        let mut doc = json!({ "arr": [1, 3] });
+        let op = json!({ "op": "add", "path": "/arr/1", "value": 2 });
+        apply_patch_op(&mut doc, &op).unwrap();
+        assert_eq!(doc, json!({ "arr": [1, 2, 3] }));
+    }
+
+    #[test]
+    fn test_patch_replace_array_out_of_bounds_fails() {
+        let mut doc = json!({ "arr": [1, 2] });
+        let op = json!({ "op": "replace", "path": "/arr/2", "value": 99 });
+        assert!(apply_patch_op(&mut doc, &op).is_err());
+    }
+
+    #[test]
+    fn test_patch_replace_missing_object_key_fails() {
+        let mut doc = json!({ "obj": { "a": 1 } });
+        let op = json!({ "op": "replace", "path": "/obj/b", "value": 2 });
+        assert!(apply_patch_op(&mut doc, &op).is_err());
+    }
+
+    #[test]
+    fn test_patch_remove_missing_key_fails() {
+        let mut doc = json!({ "obj": { "a": 1 } });
+        let op = json!({ "op": "remove", "path": "/obj/b" });
+        assert!(apply_patch_op(&mut doc, &op).is_err());
+    }
+
+    #[test]
+    fn test_patch_missing_parent_fails() {
+        let mut doc = json!({ "obj": {} });
+        let op = json!({ "op": "add", "path": "/obj/missing/value", "value": 5 });
+        assert!(apply_patch_op(&mut doc, &op).is_err());
     }
 }

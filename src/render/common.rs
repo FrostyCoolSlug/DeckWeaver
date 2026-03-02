@@ -146,14 +146,29 @@ impl Rect {
 
     pub fn draw_filled(self, pixmap: &mut Pixmap, color: Rgba) {
         if let Some(path) = rounded_rect_path(self.x, self.y, self.w, self.h, self.radius) {
-            pixmap.fill_path(&path, &solid_paint(color), FillRule::Winding, Transform::identity(), None);
+            pixmap.fill_path(
+                &path,
+                &solid_paint(color),
+                FillRule::Winding,
+                Transform::identity(),
+                None,
+            );
         }
     }
 
     pub fn draw_stroked(self, pixmap: &mut Pixmap, color: Rgba, width: f32) {
         if let Some(path) = rounded_rect_path(self.x, self.y, self.w, self.h, self.radius) {
-            let stroke = Stroke { width, ..Default::default() };
-            pixmap.stroke_path(&path, &solid_paint(color), &stroke, Transform::identity(), None);
+            let stroke = Stroke {
+                width,
+                ..Default::default()
+            };
+            pixmap.stroke_path(
+                &path,
+                &solid_paint(color),
+                &stroke,
+                Transform::identity(),
+                None,
+            );
         }
     }
 }
@@ -168,11 +183,25 @@ fn stroke_line(pixmap: &mut Pixmap, x1: f32, y1: f32, x2: f32, y2: f32, width: f
             line_cap: tiny_skia::LineCap::Round,
             ..Default::default()
         };
-        pixmap.stroke_path(&path, &solid_paint(color), &stroke, Transform::identity(), None);
+        pixmap.stroke_path(
+            &path,
+            &solid_paint(color),
+            &stroke,
+            Transform::identity(),
+            None,
+        );
     }
 }
 
-pub fn draw_symbol(pixmap: &mut Pixmap, cx: f32, cy: f32, size: f32, width: f32, color: Rgba, is_plus: bool) {
+pub fn draw_symbol(
+    pixmap: &mut Pixmap,
+    cx: f32,
+    cy: f32,
+    size: f32,
+    width: f32,
+    color: Rgba,
+    is_plus: bool,
+) {
     let half = size / 2.0;
     stroke_line(pixmap, cx - half, cy, cx + half, cy, width, color);
     if is_plus {
@@ -180,7 +209,15 @@ pub fn draw_symbol(pixmap: &mut Pixmap, cx: f32, cy: f32, size: f32, width: f32,
     }
 }
 
-pub fn draw_diagonal_line(pixmap: &mut Pixmap, x1: f32, y1: f32, x2: f32, y2: f32, width: f32, color: Rgba) {
+pub fn draw_diagonal_line(
+    pixmap: &mut Pixmap,
+    x1: f32,
+    y1: f32,
+    x2: f32,
+    y2: f32,
+    width: f32,
+    color: Rgba,
+) {
     stroke_line(pixmap, x1, y1, x2, y2, width, color);
 }
 

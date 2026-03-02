@@ -3,10 +3,10 @@ use parking_lot::RwLock;
 use pyo3::prelude::*;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 
 #[pyclass]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ActionType {
     Knob,
     Slider,
@@ -108,7 +108,7 @@ pub struct ActionState {
     pub config: ActionConfig,
     pub device: Option<Device>,
     pub meter_value: AtomicU8,
-    pub last_render_hash: AtomicU8,
+    pub last_render_hash: AtomicU64,
     pub last_label: parking_lot::RwLock<Option<String>>,
     pub cached_icon: RwLock<Option<(u64, CachedIcon)>>,
     pub cached_base: RwLock<Option<CachedBaseRender>>,
@@ -121,7 +121,8 @@ impl ActionState {
             config,
             device: None,
             meter_value: AtomicU8::new(0),
-            last_render_hash: AtomicU8::new(0),
+            // Force first frame to render even when device/meter state hashes to 0.
+            last_render_hash: AtomicU64::new(u64::MAX),
             last_label: parking_lot::RwLock::new(None),
             cached_icon: RwLock::new(None),
             cached_base: RwLock::new(None),
@@ -152,7 +153,7 @@ impl ActionState {
             self.config.is_top.hash(&mut hasher);
         }
         let current_hash = hasher.finish();
-        
+
         let mut cached_hash_guard = self.cached_base_hash.write();
         if let Some(cached) = *cached_hash_guard {
             if cached == current_hash {
@@ -166,7 +167,9 @@ impl ActionState {
     pub fn needs_base_rebuild(&self) -> bool {
         let current_hash = self.base_hash();
         let cached = self.cached_base.read();
-        cached.as_ref().map_or(true, |c| c.base_hash != current_hash)
+        cached
+            .as_ref()
+            .map_or(true, |c| c.base_hash != current_hash)
     }
 
     pub fn get_cached_icon(&self, png_data: Option<&[u8]>, max_size: f32) -> Option<CachedIcon> {
@@ -196,7 +199,9 @@ impl ActionState {
         let scale = (max_size / iw).min(max_size / ih).min(1.0);
         let (sw, sh) = ((iw * scale) as u32, (ih * scale) as u32);
 
-        let resized = img.resize(sw, sh, image::imageops::FilterType::Triangle).to_rgba8();
+        let resized = img
+            .resize(sw, sh, image::imageops::FilterType::Triangle)
+            .to_rgba8();
 
         let cached = CachedIcon {
             rgba8: resized,
@@ -226,19 +231,53 @@ impl ActionState {
         self.meter_value.store(value, Ordering::Relaxed);
     }
 
-    pub fn render_hash(&self) -> u8 {
-        let mut hash: u8 = 0;
+    pub fn render_hash(&self) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        self.config.action_type.hash(&mut hasher);
+        self.config.device_id.hash(&mut hasher);
+        self.config.meters_enabled.hash(&mut hasher);
+        self.config.orientation.hash(&mut hasher);
+        self.config.is_top.hash(&mut hasher);
+        self.get_meter().hash(&mut hasher);
+
         if let Some(ref device) = self.device {
-            hash = hash.wrapping_add(device.volume);
-            hash = hash.wrapping_add(if device.is_muted { 128 } else { 0 });
+            device.id.hash(&mut hasher);
+            device.volume.hash(&mut hasher);
+            device.is_muted.hash(&mut hasher);
+        } else {
+            0u8.hash(&mut hasher);
         }
-        hash = hash.wrapping_add(self.get_meter());
-        hash
+
+        hasher.finish()
     }
 
     pub fn needs_render(&self) -> bool {
         let current = self.render_hash();
         let last = self.last_render_hash.swap(current, Ordering::Relaxed);
         current != last
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config() -> ActionConfig {
+        ActionConfig::new("test-action".to_string(), ActionType::Knob, 200, 100)
+    }
+
+    #[test]
+    fn first_frame_requires_render() {
+        let state = ActionState::new(config());
+        assert!(state.needs_render());
+        assert!(!state.needs_render());
+    }
+
+    #[test]
+    fn meter_change_triggers_render() {
+        let state = ActionState::new(config());
+        assert!(state.needs_render());
+        state.set_meter(17);
+        assert!(state.needs_render());
     }
 }

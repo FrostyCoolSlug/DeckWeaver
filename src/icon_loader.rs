@@ -10,19 +10,20 @@ const MIN_ICON_SIZE: u32 = 200;
 #[pyfunction]
 pub fn load_icon_to_png(path: &str) -> PyResult<Option<Vec<u8>>> {
     let path_obj = Path::new(path);
-    
+
     if !path_obj.exists() {
         return Ok(None);
     }
-    
-    if path_obj.extension()
+
+    if path_obj
+        .extension()
         .and_then(|ext| ext.to_str())
         .map(|ext| ext.eq_ignore_ascii_case("svg"))
         .unwrap_or(false)
     {
         return load_svg_to_png(path);
     }
-    
+
     load_image_to_png(path)
 }
 
@@ -34,7 +35,7 @@ fn load_svg_to_png(path: &str) -> PyResult<Option<Vec<u8>>> {
             return Ok(None);
         }
     };
-    
+
     let opt = usvg::Options::default();
     let tree = match usvg::Tree::from_data(&svg_data, &opt) {
         Ok(tree) => tree,
@@ -43,20 +44,21 @@ fn load_svg_to_png(path: &str) -> PyResult<Option<Vec<u8>>> {
             return Ok(None);
         }
     };
-    
+
     let size = tree.size();
-    let (target_width, target_height, scale_x, scale_y) = if size.width() > 0.0 && size.height() > 0.0 {
-        let max_dim = size.width().max(size.height());
-        let scale = DEFAULT_ICON_SIZE as f32 / max_dim;
-        let tw = (size.width() * scale) as u32;
-        let th = (size.height() * scale) as u32;
-        let sx = tw as f32 / size.width();
-        let sy = th as f32 / size.height();
-        (tw, th, sx, sy)
-    } else {
-        (DEFAULT_ICON_SIZE, DEFAULT_ICON_SIZE, 1.0, 1.0)
-    };
-    
+    let (target_width, target_height, scale_x, scale_y) =
+        if size.width() > 0.0 && size.height() > 0.0 {
+            let max_dim = size.width().max(size.height());
+            let scale = DEFAULT_ICON_SIZE as f32 / max_dim;
+            let tw = (size.width() * scale) as u32;
+            let th = (size.height() * scale) as u32;
+            let sx = tw as f32 / size.width();
+            let sy = th as f32 / size.height();
+            (tw, th, sx, sy)
+        } else {
+            (DEFAULT_ICON_SIZE, DEFAULT_ICON_SIZE, 1.0, 1.0)
+        };
+
     let mut pixmap = match tiny_skia::Pixmap::new(target_width, target_height) {
         Some(pixmap) => pixmap,
         None => {
@@ -64,10 +66,10 @@ fn load_svg_to_png(path: &str) -> PyResult<Option<Vec<u8>>> {
             return Ok(None);
         }
     };
-    
+
     let transform = tiny_skia::Transform::from_scale(scale_x, scale_y);
     resvg::render(&tree, transform, &mut pixmap.as_mut());
-    
+
     match pixmap.encode_png() {
         Ok(png_data) => Ok(Some(png_data)),
         Err(e) => {
@@ -85,11 +87,11 @@ fn load_image_to_png(path: &str) -> PyResult<Option<Vec<u8>>> {
             return Ok(None);
         }
     };
-    
+
     let rgba_img = img.to_rgba8();
     let (width, height) = rgba_img.dimensions();
     let max_dim = width.max(height);
-    
+
     let final_img = if max_dim < MIN_ICON_SIZE {
         let scale = MIN_ICON_SIZE as f32 / max_dim as f32;
         let new_width = (width as f32 * scale) as u32;
@@ -98,7 +100,7 @@ fn load_image_to_png(path: &str) -> PyResult<Option<Vec<u8>>> {
     } else {
         rgba_img
     };
-    
+
     let mut png_data = Vec::new();
     {
         let encoder = image::codecs::png::PngEncoder::new(&mut png_data);
@@ -112,6 +114,6 @@ fn load_image_to_png(path: &str) -> PyResult<Option<Vec<u8>>> {
             return Ok(None);
         }
     }
-    
+
     Ok(Some(png_data))
 }

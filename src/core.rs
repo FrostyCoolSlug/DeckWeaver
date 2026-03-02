@@ -1,20 +1,20 @@
 use crate::action::{ActionConfig, ActionState, ActionType};
 use crate::devices::{apply_patch_op, Device, DeviceType, Status};
-use crate::render::{ButtonRenderer, KnobRenderer, RenderParams, SliderRenderer, pixmap_to_rgba};
+use crate::render::{pixmap_to_rgba, ButtonRenderer, KnobRenderer, RenderParams, SliderRenderer};
 use futures_util::{SinkExt, StreamExt};
 use parking_lot::RwLock;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict};
 use serde_json::Value;
-use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::net::TcpStream;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tiny_skia::Pixmap;
+use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 const RENDER_INTERVAL: Duration = Duration::from_micros(33333);
 const DEFAULT_HOST: &str = "localhost";
@@ -97,23 +97,25 @@ impl DeckWeaverCore {
         if let Some(state) = self.actions.write().get_mut(action_id) {
             state.config = config;
             state.device = None;
-            state.last_render_hash.store(255, Ordering::Relaxed);
+            state.last_render_hash.store(u64::MAX, Ordering::Relaxed);
         }
     }
 
     fn get_pending_updates<'a>(&self, py: Python<'a>) -> PyResult<Bound<'a, PyDict>> {
         let current_generation = self.page_generation.load(Ordering::SeqCst);
         let mut updates = self.pending_updates.write();
-        
+
         let dict = PyDict::new(py);
         let to_remove: Vec<_> = updates
             .iter()
             .filter(|(_, update)| update.generation == current_generation)
             .map(|(id, _)| id.clone())
             .collect();
-        
+
         for action_id in &to_remove {
-            let Some(update) = updates.get(action_id) else { continue };
+            let Some(update) = updates.get(action_id) else {
+                continue;
+            };
             let entry = PyDict::new(py);
             if let Some(bytes) = &update.image {
                 entry.set_item("image", PyBytes::new(py, bytes))?;
@@ -133,16 +135,16 @@ impl DeckWeaverCore {
             }
             dict.set_item(action_id, entry)?;
         }
-        
+
         for action_id in to_remove {
             updates.remove(&action_id);
         }
-        
+
         Ok(dict)
     }
 
     fn is_available(&self) -> bool {
-        self.service_available.load(Ordering::Relaxed) || self.status.read().is_some()
+        self.service_available.load(Ordering::Relaxed)
     }
 
     fn get_devices(&self) -> Vec<Device> {
@@ -172,24 +174,35 @@ impl DeckWeaverCore {
     }
 
     fn get_device(&self, device_id: &str) -> Option<Device> {
-        self.status.read().as_ref().and_then(|s| s.get_device(device_id, None))
+        self.status
+            .read()
+            .as_ref()
+            .and_then(|s| s.get_device(device_id, None))
     }
 
     fn set_volume(&self, device_id: &str, volume: u8) -> bool {
-        self.send_command(Command::SetVolume { device_id: device_id.to_string(), volume })
+        self.send_command(Command::SetVolume {
+            device_id: device_id.to_string(),
+            volume,
+        })
     }
 
     fn set_volume_relative(&self, device_id: &str, delta: i8) -> bool {
-        self.send_command(Command::SetVolumeRelative { device_id: device_id.to_string(), delta })
+        self.send_command(Command::SetVolumeRelative {
+            device_id: device_id.to_string(),
+            delta,
+        })
     }
 
     fn toggle_mute(&self, device_id: &str) -> bool {
-        self.send_command(Command::ToggleMute { device_id: device_id.to_string() })
+        self.send_command(Command::ToggleMute {
+            device_id: device_id.to_string(),
+        })
     }
 
     fn force_render(&self, action_id: &str) {
         if let Some(state) = self.actions.read().get(action_id) {
-            state.last_render_hash.store(255, Ordering::Relaxed);
+            state.last_render_hash.store(u64::MAX, Ordering::Relaxed);
         }
     }
 
@@ -218,7 +231,6 @@ impl DeckWeaverCore {
             .is_some_and(|tx| tx.try_send(cmd).is_ok())
     }
 
-
     fn start_websocket_thread(&self) {
         let running = self.running.clone();
         let status = self.status.clone();
@@ -233,9 +245,6 @@ impl DeckWeaverCore {
                     .expect("Failed to create tokio runtime");
 
                 rt.block_on(async move {
-                    let (cmd_tx, mut cmd_rx) = tokio::sync::mpsc::channel(32);
-                    *command_tx_holder.write() = Some(cmd_tx);
-
                     let url = format!("ws://{}:{}/api/websocket", DEFAULT_HOST, DEFAULT_PORT);
                     let command_id = AtomicU64::new(0);
 
@@ -244,12 +253,15 @@ impl DeckWeaverCore {
                             Ok((ws, _)) => ws,
                             Err(e) => {
                                 tracing::warn!("WebSocket connection failed: {}", e);
+                                *command_tx_holder.write() = None;
                                 tokio::time::sleep(RECONNECT_DELAY).await;
                                 continue;
                             }
                         };
 
                         tracing::info!("Connected to PipeWeaver");
+                        let (cmd_tx, mut cmd_rx) = tokio::sync::mpsc::channel(32);
+                        *command_tx_holder.write() = Some(cmd_tx);
                         let (mut write, mut read) = ws.split();
 
                         let initial_id = command_id.fetch_add(1, Ordering::SeqCst);
@@ -293,6 +305,9 @@ impl DeckWeaverCore {
                             }
                         }
 
+                        *command_tx_holder.write() = None;
+                        *status.write() = None;
+
                         if running.load(Ordering::SeqCst) {
                             tokio::time::sleep(RECONNECT_DELAY).await;
                         }
@@ -327,7 +342,7 @@ impl DeckWeaverCore {
                             let guard = actions.read();
                             guard.values().any(|s| s.config.meters_enabled)
                         };
-                        
+
                         if !has_meters_enabled {
                             tokio::time::sleep(Duration::from_secs(1)).await;
                             continue;
@@ -348,7 +363,7 @@ impl DeckWeaverCore {
                                 let guard = actions.read();
                                 guard.values().any(|s| s.config.meters_enabled)
                             };
-                            
+
                             if !has_meters_enabled {
                                 break;
                             }
@@ -370,7 +385,7 @@ impl DeckWeaverCore {
                                                                 s.config.device_id.as_ref().map_or(false, |did| did == id)
                                                             })
                                                         };
-                                                        
+
                                                         if device_needs_meters {
                                                             let now = Instant::now();
                                                             let should_update = last_update
@@ -425,6 +440,7 @@ impl DeckWeaverCore {
             .spawn(move || {
                 let mut renderers = Renderers::new();
                 let mut last_generation = 0u64;
+                let mut last_available = false;
 
                 while running.load(Ordering::SeqCst) {
                     let frame_start = Instant::now();
@@ -436,7 +452,9 @@ impl DeckWeaverCore {
                     }
                     last_generation = current_generation;
 
-                    let available = service_available.load(Ordering::Relaxed) || status.read().is_some();
+                    let available = service_available.load(Ordering::Relaxed);
+                    let availability_changed = available != last_available;
+                    last_available = available;
                     let mut label_updates = Vec::new();
 
                     let action_ids: Vec<String> = {
@@ -449,13 +467,17 @@ impl DeckWeaverCore {
                         let mut actions_guard = actions.write();
 
                         for action_id in action_ids {
-                            let Some(state) = actions_guard.get_mut(&action_id) else { continue };
-                            let Some(device_id) = state.config.device_id.as_ref() else { continue };
-                            
-                            if let Some(ref st) = *status_guard {
-                                state.device = st.get_device(device_id, None);
-                            }
-                            
+                            let Some(state) = actions_guard.get_mut(&action_id) else {
+                                continue;
+                            };
+                            let Some(device_id) = state.config.device_id.as_ref() else {
+                                continue;
+                            };
+
+                            state.device = status_guard
+                                .as_ref()
+                                .and_then(|st| st.get_device(device_id, None));
+
                             if state.config.meters_enabled {
                                 let meter_guard = meter_data.read();
                                 if let Some(&meter) = meter_guard.get(device_id) {
@@ -464,7 +486,7 @@ impl DeckWeaverCore {
                             } else {
                                 state.set_meter(0);
                             }
-                            
+
                             if let Some(name) = state.device.as_ref().map(|d| d.name.as_str()) {
                                 if state.label_changed(Some(name)) {
                                     label_updates.push((action_id, name.to_string()));
@@ -480,16 +502,17 @@ impl DeckWeaverCore {
                                 .get(&action_id)
                                 .and_then(|u| u.label.as_ref())
                                 .map_or(true, |existing| existing != &label);
-                            
+
                             if should_update {
-                                let update = updates.entry(action_id).or_insert_with(|| PendingUpdate {
-                                    image: None,
-                                    width: None,
-                                    height: None,
-                                    image_hash: None,
-                                    label: None,
-                                    generation: current_generation,
-                                });
+                                let update =
+                                    updates.entry(action_id).or_insert_with(|| PendingUpdate {
+                                        image: None,
+                                        width: None,
+                                        height: None,
+                                        image_hash: None,
+                                        label: None,
+                                        generation: current_generation,
+                                    });
                                 update.label = Some(label);
                                 update.generation = current_generation;
                             }
@@ -498,41 +521,74 @@ impl DeckWeaverCore {
 
                     let tasks: Vec<_> = {
                         let guard = actions.read();
-                        guard.iter()
-                            .filter(|(_, s)| s.needs_render())
+                        guard
+                            .iter()
+                            .filter(|(_, s)| {
+                                if availability_changed {
+                                    s.last_render_hash.store(u64::MAX, Ordering::Relaxed);
+                                }
+                                s.needs_render()
+                            })
                             .map(|(id, s)| {
                                 let max_icon_size = match s.config.action_type {
                                     ActionType::Knob => 52.0,
                                     _ => (s.config.width as f32) * 0.5,
                                 };
-                                let cached_icon = s.get_cached_icon(
-                                    s.config.icon_png.as_deref(),
-                                    max_icon_size,
-                                );
-                                
-                                let needs_base_rebuild = if (s.config.action_type == ActionType::Knob || s.config.action_type == ActionType::Slider) && s.config.meters_enabled {
+                                let cached_icon =
+                                    s.get_cached_icon(s.config.icon_png.as_deref(), max_icon_size);
+
+                                let needs_base_rebuild = if (s.config.action_type
+                                    == ActionType::Knob
+                                    || s.config.action_type == ActionType::Slider)
+                                    && s.config.meters_enabled
+                                {
                                     s.needs_base_rebuild()
                                 } else {
                                     false
                                 };
-                                
-                                let cached_base = if (s.config.action_type == ActionType::Knob || s.config.action_type == ActionType::Slider) && s.config.meters_enabled && !needs_base_rebuild {
+
+                                let cached_base = if (s.config.action_type == ActionType::Knob
+                                    || s.config.action_type == ActionType::Slider)
+                                    && s.config.meters_enabled
+                                    && !needs_base_rebuild
+                                {
                                     s.cached_base.read().clone()
                                 } else {
                                     None
                                 };
-                                
-                                (id.clone(), s.config.clone(), s.device.clone(), s.get_meter(), cached_icon, cached_base, needs_base_rebuild)
+
+                                (
+                                    id.clone(),
+                                    s.config.clone(),
+                                    s.device.clone(),
+                                    s.get_meter(),
+                                    cached_icon,
+                                    cached_base,
+                                    needs_base_rebuild,
+                                )
                             })
                             .collect()
                     };
 
-                    for (action_id, config, device, meter, cached_icon, cached_base, needs_base_rebuild) in tasks {
+                    for (
+                        action_id,
+                        config,
+                        device,
+                        meter,
+                        cached_icon,
+                        cached_base,
+                        needs_base_rebuild,
+                    ) in tasks
+                    {
                         if page_generation.load(Ordering::SeqCst) != current_generation {
                             break;
                         }
 
-                        let cached_base = if needs_base_rebuild && (config.action_type == ActionType::Knob || config.action_type == ActionType::Slider) && config.meters_enabled {
+                        let cached_base = if needs_base_rebuild
+                            && (config.action_type == ActionType::Knob
+                                || config.action_type == ActionType::Slider)
+                            && config.meters_enabled
+                        {
                             if let Some(ref dev) = device {
                                 let is_source = dev.device_type == DeviceType::Source;
                                 let color = dev.color.as_ref().map(|c| (c.red, c.green, c.blue));
@@ -547,17 +603,19 @@ impl DeckWeaverCore {
                                     meter_invert: config.meter_invert,
                                     meters_enabled: config.meters_enabled,
                                 };
-                                
+
                                 let base_pixmap = match config.action_type {
-                                    ActionType::Knob => {
-                                        renderers.knob.render_base(&params, config.icon_png.clone(), cached_icon.as_ref())
-                                    }
+                                    ActionType::Knob => renderers.knob.render_base(
+                                        &params,
+                                        config.icon_png.clone(),
+                                        cached_icon.as_ref(),
+                                    ),
                                     ActionType::Slider => {
                                         renderers.slider(config.width).render_base(&params)
                                     }
                                     _ => None,
                                 };
-                                
+
                                 if let Some(base_pixmap) = base_pixmap {
                                     let guard = actions.write();
                                     if let Some(state) = guard.get(&action_id) {
@@ -586,7 +644,13 @@ impl DeckWeaverCore {
                         let result = if !available {
                             renderers.render_unavailable(&config)
                         } else if let Some(ref dev) = device {
-                            renderers.render_with_cached(&config, dev, meter, cached_icon.as_ref(), cached_base.as_ref())
+                            renderers.render_with_cached(
+                                &config,
+                                dev,
+                                meter,
+                                cached_icon.as_ref(),
+                                cached_base.as_ref(),
+                            )
                         } else {
                             renderers.render_loading(&config)
                         };
@@ -595,22 +659,23 @@ impl DeckWeaverCore {
                             let mut hasher = DefaultHasher::new();
                             bytes.hash(&mut hasher);
                             let image_hash = hasher.finish();
-                            
+
                             let mut updates = pending_updates.write();
                             let should_update = updates
                                 .get(&action_id)
                                 .and_then(|u| u.image_hash)
                                 .map_or(true, |existing_hash| existing_hash != image_hash);
-                            
+
                             if should_update {
-                                let update = updates.entry(action_id).or_insert_with(|| PendingUpdate {
-                                    image: None,
-                                    width: None,
-                                    height: None,
-                                    image_hash: None,
-                                    label: None,
-                                    generation: current_generation,
-                                });
+                                let update =
+                                    updates.entry(action_id).or_insert_with(|| PendingUpdate {
+                                        image: None,
+                                        width: None,
+                                        height: None,
+                                        image_hash: None,
+                                        label: None,
+                                        generation: current_generation,
+                                    });
                                 update.image = Some(bytes);
                                 update.width = Some(width);
                                 update.height = Some(height);
@@ -666,20 +731,19 @@ impl Drop for DeckWeaverCore {
 fn handle_ws_message(text: &str, status: &Arc<RwLock<Option<Status>>>) {
     let Ok(response) = serde_json::from_str::<Value>(text) else {
         let preview: String = text.chars().take(200).collect();
-        tracing::warn!("Failed to parse WebSocket message as JSON (message: {})", preview);
+        tracing::warn!(
+            "Failed to parse WebSocket message as JSON (message: {})",
+            preview
+        );
         return;
     };
 
     if let Some(status_data) = response.get("data").and_then(|d| d.get("Status")) {
         if let Ok(new_status) = serde_json::from_value::<Status>(status_data.clone()) {
+            let s = new_status;
+            s.rebuild_index();
             let mut status_guard = status.write();
-            if let Some(ref mut s) = *status_guard {
-                s.rebuild_index();
-            } else {
-                let s = new_status;
-                s.rebuild_index();
-                *status_guard = Some(s);
-            }
+            *status_guard = Some(s);
         } else {
             tracing::warn!("Failed to deserialize Status");
         }
@@ -700,7 +764,7 @@ fn apply_patch(status: &Arc<RwLock<Option<Status>>>, patch: &[Value]) {
         tracing::warn!("Cannot apply patch: status is None");
         return;
     };
-    
+
     let Ok(mut value) = serde_json::to_value(&*current) else {
         tracing::error!("Failed to serialize status for patch");
         return;
@@ -711,7 +775,7 @@ fn apply_patch(status: &Arc<RwLock<Option<Status>>>, patch: &[Value]) {
             tracing::warn!("Failed to apply patch operation: {}", e);
         }
     }
-    
+
     if let Ok(new_status) = serde_json::from_value::<Status>(value) {
         let s = new_status;
         s.rebuild_index();
@@ -722,14 +786,14 @@ fn apply_patch(status: &Arc<RwLock<Option<Status>>>, patch: &[Value]) {
 }
 
 fn build_command(status: &Arc<RwLock<Option<Status>>>, id: u64, cmd: Command) -> Option<String> {
-    let device = status
-        .read()
-        .as_ref()?
-        .get_device(match &cmd {
+    let device = status.read().as_ref()?.get_device(
+        match &cmd {
             Command::SetVolume { device_id, .. } => device_id,
             Command::SetVolumeRelative { device_id, .. } => device_id,
             Command::ToggleMute { device_id } => device_id,
-        }, None)?;
+        },
+        None,
+    )?;
 
     let data = match cmd {
         Command::SetVolume { device_id, volume } => match device.device_type {
@@ -785,11 +849,15 @@ impl Renderers {
     }
 
     fn slider(&mut self, width: u32) -> &mut SliderRenderer {
-        self.sliders.entry(width).or_insert_with(|| SliderRenderer::new(width))
+        self.sliders
+            .entry(width)
+            .or_insert_with(|| SliderRenderer::new(width))
     }
 
     fn button(&mut self, width: u32) -> &mut ButtonRenderer {
-        self.buttons.entry(width).or_insert_with(|| ButtonRenderer::new(width))
+        self.buttons
+            .entry(width)
+            .or_insert_with(|| ButtonRenderer::new(width))
     }
 
     fn render_unavailable(&mut self, config: &ActionConfig) -> Option<(Vec<u8>, u32, u32)> {
@@ -808,8 +876,14 @@ impl Renderers {
         }
     }
 
-
-    fn render_with_cached(&mut self, config: &ActionConfig, device: &Device, meter_value: u8, cached_icon: Option<&crate::action::CachedIcon>, cached_base: Option<&crate::action::CachedBaseRender>) -> Option<(Vec<u8>, u32, u32)> {
+    fn render_with_cached(
+        &mut self,
+        config: &ActionConfig,
+        device: &Device,
+        meter_value: u8,
+        cached_icon: Option<&crate::action::CachedIcon>,
+        cached_base: Option<&crate::action::CachedBaseRender>,
+    ) -> Option<(Vec<u8>, u32, u32)> {
         let is_source = device.device_type == DeviceType::Source;
         let color = device.color.as_ref().map(|c| (c.red, c.green, c.blue));
 
@@ -831,9 +905,11 @@ impl Renderers {
                     self.knob.render_meter_overlay(&mut pixmap, &params);
                     pixmap_to_rgba(&pixmap)
                 } else if let Some(cached) = cached_icon {
-                    self.knob.render_internal_png_with_cached(&params, Some(cached))
+                    self.knob
+                        .render_internal_png_with_cached(&params, Some(cached))
                 } else {
-                    self.knob.render_internal_png(&params, config.icon_png.clone())
+                    self.knob
+                        .render_internal_png(&params, config.icon_png.clone())
                 }
             }
             ActionType::Slider => {
@@ -850,26 +926,38 @@ impl Renderers {
                 };
                 if let Some(cached_base) = cached_base {
                     let mut full = cached_base.pixmap.clone();
-                    self.slider(config.width).render_meter_overlay(&mut full, &params);
-                    
+                    self.slider(config.width)
+                        .render_meter_overlay(&mut full, &params);
+
                     let mut result = Pixmap::new(config.width, config.width)?;
-                    let y_off = if config.is_top { 0 } else { config.width as usize };
+                    let y_off = if config.is_top {
+                        0
+                    } else {
+                        config.width as usize
+                    };
                     let row_bytes = config.width as usize * 4;
-                    
+
                     for y in 0..config.width as usize {
                         let src = (y + y_off) * row_bytes;
                         let dst = y * row_bytes;
-                        result.data_mut()[dst..dst + row_bytes].copy_from_slice(&full.data()[src..src + row_bytes]);
+                        result.data_mut()[dst..dst + row_bytes]
+                            .copy_from_slice(&full.data()[src..src + row_bytes]);
                     }
-                    
+
                     let is_horizontal = config.orientation == "horizontal";
                     if is_horizontal {
-                        self.slider(config.width).rotate_cw(&result).and_then(|r| pixmap_to_rgba(&r))
+                        self.slider(config.width)
+                            .rotate_cw(&result)
+                            .and_then(|r| pixmap_to_rgba(&r))
                     } else {
                         pixmap_to_rgba(&result)
                     }
                 } else {
-                    self.slider(config.width).render_internal_png(&params, config.is_top, config.orientation == "horizontal")
+                    self.slider(config.width).render_internal_png(
+                        &params,
+                        config.is_top,
+                        config.orientation == "horizontal",
+                    )
                 }
             }
             ActionType::Button => {
@@ -881,9 +969,17 @@ impl Renderers {
                     Some(false)
                 };
                 if let Some(cached) = cached_icon {
-                    self.button(config.width).render_internal_png_with_cached(is_plus, Some(cached), device.is_muted)
+                    self.button(config.width).render_internal_png_with_cached(
+                        is_plus,
+                        Some(cached),
+                        device.is_muted,
+                    )
                 } else {
-                    self.button(config.width).render_internal_png(is_plus, config.icon_png.clone(), device.is_muted)
+                    self.button(config.width).render_internal_png(
+                        is_plus,
+                        config.icon_png.clone(),
+                        device.is_muted,
+                    )
                 }
             }
         }

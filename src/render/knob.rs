@@ -52,54 +52,97 @@ impl KnobRenderer {
         icon_png: Option<Vec<u8>>,
     ) -> PyResult<(Vec<u8>, u32, u32)> {
         let params = RenderParams {
-            volume, is_muted, is_source, meter_value, device_color,
-            volume_bar_color, meter_color, meter_invert, meters_enabled,
+            volume,
+            is_muted,
+            is_source,
+            meter_value,
+            device_color,
+            volume_bar_color,
+            meter_color,
+            meter_invert,
+            meters_enabled,
         };
         self.encode_pixmap(self.render_internal(&params, icon_png, None))
     }
 
     pub fn render_unavailable(&self) -> PyResult<(Vec<u8>, u32, u32)> {
-        self.encode_pixmap(create_filled_pixmap(self.width, self.height, COLOR_SERVICE_UNAVAILABLE_BG))
+        self.encode_pixmap(create_filled_pixmap(
+            self.width,
+            self.height,
+            COLOR_SERVICE_UNAVAILABLE_BG,
+        ))
     }
 
     pub fn render_loading(&self) -> PyResult<(Vec<u8>, u32, u32)> {
-        self.encode_pixmap(create_filled_pixmap(self.width, self.height, COLOR_TRANSPARENT))
+        self.encode_pixmap(create_filled_pixmap(
+            self.width,
+            self.height,
+            COLOR_TRANSPARENT,
+        ))
     }
 }
 
 impl KnobRenderer {
     fn encode_pixmap(&self, pixmap: Option<Pixmap>) -> PyResult<(Vec<u8>, u32, u32)> {
-        let pixmap = pixmap.ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("Failed to render"))?;
-        pixmap_to_rgba(&pixmap).ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("Failed to encode RGBA"))
+        let pixmap =
+            pixmap.ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("Failed to render"))?;
+        pixmap_to_rgba(&pixmap)
+            .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("Failed to encode RGBA"))
     }
 
-    pub fn render_internal_png(&self, params: &RenderParams, icon_png: Option<Vec<u8>>) -> Option<(Vec<u8>, u32, u32)> {
+    pub fn render_internal_png(
+        &self,
+        params: &RenderParams,
+        icon_png: Option<Vec<u8>>,
+    ) -> Option<(Vec<u8>, u32, u32)> {
         pixmap_to_rgba(&self.render_internal(params, icon_png, None)?)
     }
 
-    pub fn render_internal_png_with_cached(&self, params: &RenderParams, cached_icon: Option<&crate::action::CachedIcon>) -> Option<(Vec<u8>, u32, u32)> {
+    pub fn render_internal_png_with_cached(
+        &self,
+        params: &RenderParams,
+        cached_icon: Option<&crate::action::CachedIcon>,
+    ) -> Option<(Vec<u8>, u32, u32)> {
         pixmap_to_rgba(&self.render_internal(params, None, cached_icon)?)
     }
 
     pub fn render_unavailable_internal(&self) -> Option<(Vec<u8>, u32, u32)> {
-        pixmap_to_rgba(&create_filled_pixmap(self.width, self.height, COLOR_SERVICE_UNAVAILABLE_BG)?)
+        pixmap_to_rgba(&create_filled_pixmap(
+            self.width,
+            self.height,
+            COLOR_SERVICE_UNAVAILABLE_BG,
+        )?)
     }
 
     pub fn render_loading_internal(&self) -> Option<(Vec<u8>, u32, u32)> {
-        pixmap_to_rgba(&create_filled_pixmap(self.width, self.height, COLOR_TRANSPARENT)?)
+        pixmap_to_rgba(&create_filled_pixmap(
+            self.width,
+            self.height,
+            COLOR_TRANSPARENT,
+        )?)
     }
 
-    fn render_internal(&self, params: &RenderParams, icon_png: Option<Vec<u8>>, cached_icon: Option<&crate::action::CachedIcon>) -> Option<Pixmap> {
+    fn render_internal(
+        &self,
+        params: &RenderParams,
+        icon_png: Option<Vec<u8>>,
+        cached_icon: Option<&crate::action::CachedIcon>,
+    ) -> Option<Pixmap> {
         let mut pixmap = self.render_base(params, icon_png, cached_icon)?;
-        
+
         if params.meters_enabled && params.meter_value > 0 {
             self.render_meter_overlay(&mut pixmap, params);
         }
-        
+
         Some(pixmap)
     }
 
-    pub fn render_base(&self, params: &RenderParams, icon_png: Option<Vec<u8>>, cached_icon: Option<&crate::action::CachedIcon>) -> Option<Pixmap> {
+    pub fn render_base(
+        &self,
+        params: &RenderParams,
+        icon_png: Option<Vec<u8>>,
+        cached_icon: Option<&crate::action::CachedIcon>,
+    ) -> Option<Pixmap> {
         let (w, h) = (self.width as f32, self.height as f32);
         let mut pixmap = Pixmap::new(self.width, self.height)?;
         fill_background(&mut pixmap, COLOR_TRANSPARENT);
@@ -119,20 +162,36 @@ impl KnobRenderer {
 
         if let Some(color) = fill_color {
             if fill_width > 0.0 {
-                Rect::new(bar_x, bar_y, fill_width, BAR_HEIGHT, bar_radius).draw_filled(&mut pixmap, color);
+                Rect::new(bar_x, bar_y, fill_width, BAR_HEIGHT, bar_radius)
+                    .draw_filled(&mut pixmap, color);
             }
         }
 
         bar.draw_stroked(&mut pixmap, COLOR_BLACK, STROKE_WIDTH);
 
         if let Some(cached) = cached_icon {
-            self.composite_rgba8(&mut pixmap, &cached.rgba8, cached.width, cached.height, icon_x, icon_y);
+            self.composite_rgba8(
+                &mut pixmap,
+                &cached.rgba8,
+                cached.width,
+                cached.height,
+                icon_x,
+                icon_y,
+            );
         } else if let Some(png_data) = icon_png {
             self.composite_icon(&mut pixmap, &png_data, icon_x, icon_y);
         }
 
         if params.is_muted {
-            draw_diagonal_line(&mut pixmap, icon_x, icon_y, icon_x + ICON_MAX_SIZE, icon_y + ICON_MAX_SIZE, 6.0, COLOR_RED);
+            draw_diagonal_line(
+                &mut pixmap,
+                icon_x,
+                icon_y,
+                icon_x + ICON_MAX_SIZE,
+                icon_y + ICON_MAX_SIZE,
+                6.0,
+                COLOR_RED,
+            );
         }
 
         Some(pixmap)
@@ -144,10 +203,10 @@ impl KnobRenderer {
         let bar_x = icon_x + ICON_MAX_SIZE + EDGE_PADDING;
         let bar_w = w - bar_x - CORNER_INSET;
         let bar_y = h - BAR_HEIGHT - CORNER_INSET - BAR_OFFSET_Y;
-        
+
         let fill_color = params.fill_color();
         let fill_width = (params.volume as f32 / 100.0) * bar_w;
-        
+
         if params.meter_value > 0 && fill_width > 0.0 {
             if let Some(fc) = fill_color {
                 let available = fill_width - METER_MARGIN_X * 2.0;
@@ -159,25 +218,43 @@ impl KnobRenderer {
                     } else {
                         params.meter_color.map(Rgba::from).unwrap_or(COLOR_BLACK)
                     };
-                    Rect::new(bar_x + METER_MARGIN_X, meter_y, meter_w, METER_HEIGHT, METER_HEIGHT / 2.0)
-                        .draw_filled(pixmap, meter_color);
+                    Rect::new(
+                        bar_x + METER_MARGIN_X,
+                        meter_y,
+                        meter_w,
+                        METER_HEIGHT,
+                        METER_HEIGHT / 2.0,
+                    )
+                    .draw_filled(pixmap, meter_color);
                 }
             }
         }
     }
 
     fn composite_icon(&self, pixmap: &mut Pixmap, png_data: &[u8], x: f32, y: f32) {
-        let Ok(img) = image::load_from_memory(png_data) else { return };
+        let Ok(img) = image::load_from_memory(png_data) else {
+            return;
+        };
 
         let (iw, ih) = (img.width() as f32, img.height() as f32);
         let scale = (ICON_MAX_SIZE / iw).min(ICON_MAX_SIZE / ih).min(1.0);
         let (sw, sh) = ((iw * scale) as u32, (ih * scale) as u32);
 
-        let resized = img.resize(sw, sh, image::imageops::FilterType::Triangle).to_rgba8();
+        let resized = img
+            .resize(sw, sh, image::imageops::FilterType::Triangle)
+            .to_rgba8();
         self.composite_rgba8(pixmap, &resized, sw, sh, x, y);
     }
 
-    fn composite_rgba8(&self, pixmap: &mut Pixmap, rgba8: &image::RgbaImage, sw: u32, sh: u32, x: f32, y: f32) {
+    fn composite_rgba8(
+        &self,
+        pixmap: &mut Pixmap,
+        rgba8: &image::RgbaImage,
+        sw: u32,
+        sh: u32,
+        x: f32,
+        y: f32,
+    ) {
         let (fx, fy) = (
             (x + (ICON_MAX_SIZE - sw as f32) / 2.0) as i32,
             (y + (ICON_MAX_SIZE - sh as f32) / 2.0) as i32,
@@ -201,7 +278,9 @@ impl KnobRenderer {
             let dst_a = data[idx + 3] as f32 / 255.0;
             let out_a = src_a + dst_a * (1.0 - src_a);
             if out_a > 0.0 {
-                let blend = |s: u8, d: u8| ((s as f32 * src_a + d as f32 * dst_a * (1.0 - src_a)) / out_a) as u8;
+                let blend = |s: u8, d: u8| {
+                    ((s as f32 * src_a + d as f32 * dst_a * (1.0 - src_a)) / out_a) as u8
+                };
                 data[idx] = blend(pixel[0], data[idx]);
                 data[idx + 1] = blend(pixel[1], data[idx + 1]);
                 data[idx + 2] = blend(pixel[2], data[idx + 2]);

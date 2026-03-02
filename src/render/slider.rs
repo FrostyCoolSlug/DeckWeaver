@@ -49,46 +49,81 @@ impl SliderRenderer {
         meters_enabled: bool,
     ) -> PyResult<(Vec<u8>, u32, u32)> {
         let params = RenderParams {
-            volume, is_muted: false, is_source, meter_value, device_color,
-            volume_bar_color, meter_color, meter_invert, meters_enabled,
+            volume,
+            is_muted: false,
+            is_source,
+            meter_value,
+            device_color,
+            volume_bar_color,
+            meter_color,
+            meter_invert,
+            meters_enabled,
         };
         self.encode_pixmap(self.render_internal(&params, is_top, is_horizontal))
     }
 
     pub fn render_unavailable(&self) -> PyResult<(Vec<u8>, u32, u32)> {
-        self.encode_pixmap(create_filled_pixmap(self.button_size, self.button_size, COLOR_SERVICE_UNAVAILABLE_BG))
+        self.encode_pixmap(create_filled_pixmap(
+            self.button_size,
+            self.button_size,
+            COLOR_SERVICE_UNAVAILABLE_BG,
+        ))
     }
 
     pub fn render_loading(&self) -> PyResult<(Vec<u8>, u32, u32)> {
-        self.encode_pixmap(create_filled_pixmap(self.button_size, self.button_size, COLOR_TRANSPARENT))
+        self.encode_pixmap(create_filled_pixmap(
+            self.button_size,
+            self.button_size,
+            COLOR_TRANSPARENT,
+        ))
     }
 }
 
 impl SliderRenderer {
     fn encode_pixmap(&self, pixmap: Option<Pixmap>) -> PyResult<(Vec<u8>, u32, u32)> {
-        let pixmap = pixmap.ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("Failed to render"))?;
-        pixmap_to_rgba(&pixmap).ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("Failed to encode RGBA"))
+        let pixmap =
+            pixmap.ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("Failed to render"))?;
+        pixmap_to_rgba(&pixmap)
+            .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("Failed to encode RGBA"))
     }
 
-    pub fn render_internal_png(&self, params: &RenderParams, is_top: bool, is_horizontal: bool) -> Option<(Vec<u8>, u32, u32)> {
+    pub fn render_internal_png(
+        &self,
+        params: &RenderParams,
+        is_top: bool,
+        is_horizontal: bool,
+    ) -> Option<(Vec<u8>, u32, u32)> {
         pixmap_to_rgba(&self.render_internal(params, is_top, is_horizontal)?)
     }
 
     pub fn render_unavailable_internal(&self) -> Option<(Vec<u8>, u32, u32)> {
-        pixmap_to_rgba(&create_filled_pixmap(self.button_size, self.button_size, COLOR_SERVICE_UNAVAILABLE_BG)?)
+        pixmap_to_rgba(&create_filled_pixmap(
+            self.button_size,
+            self.button_size,
+            COLOR_SERVICE_UNAVAILABLE_BG,
+        )?)
     }
 
     pub fn render_loading_internal(&self) -> Option<(Vec<u8>, u32, u32)> {
-        pixmap_to_rgba(&create_filled_pixmap(self.button_size, self.button_size, COLOR_TRANSPARENT)?)
+        pixmap_to_rgba(&create_filled_pixmap(
+            self.button_size,
+            self.button_size,
+            COLOR_TRANSPARENT,
+        )?)
     }
 
-    fn render_internal(&self, params: &RenderParams, is_top: bool, is_horizontal: bool) -> Option<Pixmap> {
+    fn render_internal(
+        &self,
+        params: &RenderParams,
+        is_top: bool,
+        is_horizontal: bool,
+    ) -> Option<Pixmap> {
         let mut full = self.render_base(params)?;
-        
+
         if params.meters_enabled && params.meter_value > 0 {
             self.render_meter_overlay(&mut full, params);
         }
-        
+
         let mut result = Pixmap::new(self.button_size, self.button_size)?;
         let y_off = if is_top { 0 } else { self.button_size as usize };
         let row_bytes = self.button_size as usize * 4;
@@ -96,10 +131,15 @@ impl SliderRenderer {
         for y in 0..self.button_size as usize {
             let src = (y + y_off) * row_bytes;
             let dst = y * row_bytes;
-            result.data_mut()[dst..dst + row_bytes].copy_from_slice(&full.data()[src..src + row_bytes]);
+            result.data_mut()[dst..dst + row_bytes]
+                .copy_from_slice(&full.data()[src..src + row_bytes]);
         }
 
-        if is_horizontal { self.rotate_cw(&result) } else { Some(result) }
+        if is_horizontal {
+            self.rotate_cw(&result)
+        } else {
+            Some(result)
+        }
     }
 
     pub fn render_base(&self, params: &RenderParams) -> Option<Pixmap> {
@@ -118,15 +158,21 @@ impl SliderRenderer {
         let fill_h = (params.volume as f32 / 100.0) * slider_h;
 
         let gutter_radius = (BAR_WIDTH / 2.0).min(slider_h / 2.0);
-        
+
         let bar = Rect::new(slider_x, slider_y, BAR_WIDTH, slider_h, gutter_radius);
         bar.draw_filled(&mut full, gutter_color_for(fill_color));
 
         let fill_radius = (BAR_WIDTH / 2.0).min(fill_h / 2.0);
         if let Some(color) = fill_color {
             if fill_h > 0.0 {
-                Rect::new(slider_x, slider_y + slider_h - fill_h, BAR_WIDTH, fill_h, fill_radius)
-                    .draw_filled(&mut full, color);
+                Rect::new(
+                    slider_x,
+                    slider_y + slider_h - fill_h,
+                    BAR_WIDTH,
+                    fill_h,
+                    fill_radius,
+                )
+                .draw_filled(&mut full, color);
             }
         }
 
@@ -141,10 +187,10 @@ impl SliderRenderer {
         let slider_y = CORNER_INSET + BAR_OFFSET_Y;
         let slider_h = double_h - CORNER_INSET * 2.0 - BAR_OFFSET_Y;
         let slider_x = (size - BAR_WIDTH) / 2.0;
-        
+
         let fill_color = params.fill_color();
         let fill_h = (params.volume as f32 / 100.0) * slider_h;
-        
+
         if params.meter_value > 0 && fill_h > 0.0 {
             if let Some(fc) = fill_color {
                 let fill_y = slider_y + slider_h - fill_h;
