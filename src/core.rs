@@ -537,21 +537,14 @@ impl DeckWeaverCore {
                                 let cached_icon =
                                     s.get_cached_icon(s.config.icon_png.as_deref(), max_icon_size);
 
-                                let needs_base_rebuild = if (s.config.action_type
-                                    == ActionType::Knob
-                                    || s.config.action_type == ActionType::Slider)
-                                    && s.config.meters_enabled
-                                {
-                                    s.needs_base_rebuild()
-                                } else {
-                                    false
-                                };
+                                let is_meter_cache_action = matches!(
+                                    s.config.action_type,
+                                    ActionType::Knob | ActionType::Slider
+                                ) && s.config.meters_enabled;
+                                let needs_base_rebuild =
+                                    is_meter_cache_action && s.needs_base_rebuild();
 
-                                let cached_base = if (s.config.action_type == ActionType::Knob
-                                    || s.config.action_type == ActionType::Slider)
-                                    && s.config.meters_enabled
-                                    && !needs_base_rebuild
-                                {
+                                let cached_base = if is_meter_cache_action && !needs_base_rebuild {
                                     s.cached_base.read().clone()
                                 } else {
                                     None
@@ -564,6 +557,7 @@ impl DeckWeaverCore {
                                     s.get_meter(),
                                     cached_icon,
                                     cached_base,
+                                    is_meter_cache_action,
                                     needs_base_rebuild,
                                 )
                             })
@@ -577,6 +571,7 @@ impl DeckWeaverCore {
                         meter,
                         cached_icon,
                         cached_base,
+                        is_meter_cache_action,
                         needs_base_rebuild,
                     ) in tasks
                     {
@@ -584,11 +579,7 @@ impl DeckWeaverCore {
                             break;
                         }
 
-                        let cached_base = if needs_base_rebuild
-                            && (config.action_type == ActionType::Knob
-                                || config.action_type == ActionType::Slider)
-                            && config.meters_enabled
-                        {
+                        let cached_base = if is_meter_cache_action && needs_base_rebuild {
                             if let Some(ref dev) = device {
                                 let is_source = dev.device_type == DeviceType::Source;
                                 let color = dev.color.as_ref().map(|c| (c.red, c.green, c.blue));

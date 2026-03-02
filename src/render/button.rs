@@ -109,7 +109,6 @@ impl ButtonRenderer {
         let mut pixmap = Pixmap::new(self.button_size, self.button_size)?;
         fill_background(&mut pixmap, COLOR_TRANSPARENT);
 
-        let center = size / 2.0;
         let has_icon = cached_icon.is_some() || icon_png.is_some();
 
         if let Some(cached) = cached_icon {
@@ -119,44 +118,8 @@ impl ButtonRenderer {
         }
 
         match is_plus {
-            Some(true) => {
-                let (cx, cy, sym_size, line_width) = if has_icon {
-                    let inset = (size * CORNER_INSET_RATIO).max(MIN_CORNER_INSET);
-                    let sym = size * SMALL_SYMBOL_RATIO;
-                    (
-                        size - inset - sym / 2.0,
-                        size - inset - sym / 2.0,
-                        sym,
-                        (size * SMALL_LINE_WIDTH_RATIO).max(MIN_LINE_WIDTH),
-                    )
-                } else {
-                    (
-                        center,
-                        center,
-                        size * LARGE_SYMBOL_RATIO,
-                        (size * LARGE_LINE_WIDTH_RATIO).max(3.0),
-                    )
-                };
-                draw_symbol(&mut pixmap, cx, cy, sym_size, line_width, COLOR_WHITE, true);
-            }
-            Some(false) => {
-                let (cx, cy, sym_size, line_width) = if has_icon {
-                    let inset = (size * CORNER_INSET_RATIO).max(MIN_CORNER_INSET);
-                    let sym = size * SMALL_SYMBOL_RATIO;
-                    (
-                        size - inset - sym / 2.0,
-                        size - inset - sym / 2.0,
-                        sym,
-                        (size * SMALL_LINE_WIDTH_RATIO).max(MIN_LINE_WIDTH),
-                    )
-                } else {
-                    (
-                        center,
-                        center,
-                        size * LARGE_SYMBOL_RATIO,
-                        (size * LARGE_LINE_WIDTH_RATIO).max(3.0),
-                    )
-                };
+            Some(is_plus) => {
+                let (cx, cy, sym_size, line_width) = self.symbol_layout(size, has_icon);
                 draw_symbol(
                     &mut pixmap,
                     cx,
@@ -164,62 +127,90 @@ impl ButtonRenderer {
                     sym_size,
                     line_width,
                     COLOR_WHITE,
-                    false,
+                    is_plus,
                 );
             }
             None => {
                 if has_icon {
                     if is_muted {
-                        let inset = (size * ICON_INSET_RATIO).max(MIN_CORNER_INSET);
-                        let icon_size = size - inset * 2.0;
-                        let icon_x = inset;
-                        let icon_y = inset;
-                        draw_diagonal_line(
-                            &mut pixmap,
-                            icon_x,
-                            icon_y,
-                            icon_x + icon_size,
-                            icon_y + icon_size,
-                            6.0,
-                            COLOR_RED,
-                        );
+                        self.draw_icon_mute_slash(&mut pixmap, size);
                     }
-
-                    let inset = (size * CORNER_INSET_RATIO).max(MIN_CORNER_INSET);
-                    let corner_sym = size * SMALL_SYMBOL_RATIO;
-                    let corner_cx = size - inset - corner_sym / 2.0;
-                    let corner_cy = size - inset - corner_sym / 2.0;
-                    let corner_width = (size * SMALL_LINE_WIDTH_RATIO).max(MIN_LINE_WIDTH);
-                    let corner_offset = corner_sym * 0.35;
-                    draw_diagonal_line(
-                        &mut pixmap,
-                        corner_cx + corner_offset,
-                        corner_cy - corner_offset,
-                        corner_cx - corner_offset,
-                        corner_cy + corner_offset,
-                        corner_width,
-                        COLOR_WHITE,
-                    );
-                } else {
-                    if is_muted {
-                        let sym_size = size * LARGE_SYMBOL_RATIO;
-                        let line_width = 6.0;
-                        let offset = sym_size * 0.35;
-                        draw_diagonal_line(
-                            &mut pixmap,
-                            center - offset,
-                            center - offset,
-                            center + offset,
-                            center + offset,
-                            line_width,
-                            COLOR_RED,
-                        );
-                    }
+                    self.draw_corner_toggle_hint(&mut pixmap, size);
+                } else if is_muted {
+                    self.draw_center_mute_slash(&mut pixmap, size);
                 }
             }
         }
 
         Some(pixmap)
+    }
+
+    fn symbol_layout(&self, size: f32, has_icon: bool) -> (f32, f32, f32, f32) {
+        if has_icon {
+            let inset = (size * CORNER_INSET_RATIO).max(MIN_CORNER_INSET);
+            let sym = size * SMALL_SYMBOL_RATIO;
+            (
+                size - inset - sym / 2.0,
+                size - inset - sym / 2.0,
+                sym,
+                (size * SMALL_LINE_WIDTH_RATIO).max(MIN_LINE_WIDTH),
+            )
+        } else {
+            let center = size / 2.0;
+            (
+                center,
+                center,
+                size * LARGE_SYMBOL_RATIO,
+                (size * LARGE_LINE_WIDTH_RATIO).max(3.0),
+            )
+        }
+    }
+
+    fn draw_icon_mute_slash(&self, pixmap: &mut Pixmap, size: f32) {
+        let inset = (size * ICON_INSET_RATIO).max(MIN_CORNER_INSET);
+        let icon_size = size - inset * 2.0;
+        draw_diagonal_line(
+            pixmap,
+            inset,
+            inset,
+            inset + icon_size,
+            inset + icon_size,
+            6.0,
+            COLOR_RED,
+        );
+    }
+
+    fn draw_center_mute_slash(&self, pixmap: &mut Pixmap, size: f32) {
+        let center = size / 2.0;
+        let sym_size = size * LARGE_SYMBOL_RATIO;
+        let offset = sym_size * 0.35;
+        draw_diagonal_line(
+            pixmap,
+            center - offset,
+            center - offset,
+            center + offset,
+            center + offset,
+            6.0,
+            COLOR_RED,
+        );
+    }
+
+    fn draw_corner_toggle_hint(&self, pixmap: &mut Pixmap, size: f32) {
+        let inset = (size * CORNER_INSET_RATIO).max(MIN_CORNER_INSET);
+        let corner_sym = size * SMALL_SYMBOL_RATIO;
+        let corner_cx = size - inset - corner_sym / 2.0;
+        let corner_cy = size - inset - corner_sym / 2.0;
+        let corner_width = (size * SMALL_LINE_WIDTH_RATIO).max(MIN_LINE_WIDTH);
+        let corner_offset = corner_sym * 0.35;
+        draw_diagonal_line(
+            pixmap,
+            corner_cx + corner_offset,
+            corner_cy - corner_offset,
+            corner_cx - corner_offset,
+            corner_cy + corner_offset,
+            corner_width,
+            COLOR_WHITE,
+        );
     }
 
     fn composite_icon(&self, pixmap: &mut Pixmap, png_data: &[u8]) {
