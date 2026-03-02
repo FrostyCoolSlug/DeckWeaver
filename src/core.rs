@@ -209,11 +209,13 @@ impl DeckWeaverCore {
 }
 
 impl DeckWeaverCore {
+    /// Send command to WebSocket thread. Never blocks: uses try_send so button presses
+    /// cannot stall the UI if the WebSocket is slow or reconnecting.
     fn send_command(&self, cmd: Command) -> bool {
         self.command_tx
             .read()
             .as_ref()
-            .is_some_and(|tx| tx.blocking_send(cmd).is_ok())
+            .is_some_and(|tx| tx.try_send(cmd).is_ok())
     }
 
 
