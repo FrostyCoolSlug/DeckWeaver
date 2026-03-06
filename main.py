@@ -364,8 +364,6 @@ class BaseAction(ActionBase):
                     # Fallback: try to decode as PNG (shouldn't happen)
                     image = Image.open(BytesIO(rgba_bytes))
                 self.set_media(image=image, update=True)
-                if inp := self.get_input():
-                    inp.update()
             except Exception as e:
                 log.error(f"Error setting image: {e}")
 
