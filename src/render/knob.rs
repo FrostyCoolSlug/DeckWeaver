@@ -66,11 +66,7 @@ impl KnobRenderer {
     }
 
     pub fn render_unavailable(&self) -> PyResult<(Vec<u8>, u32, u32)> {
-        self.encode_pixmap(create_filled_pixmap(
-            self.width,
-            self.height,
-            COLOR_SERVICE_UNAVAILABLE_BG,
-        ))
+        self.encode_pixmap(create_unavailable_pixmap(self.width, self.height))
     }
 
     pub fn render_loading(&self) -> PyResult<(Vec<u8>, u32, u32)> {
@@ -107,11 +103,7 @@ impl KnobRenderer {
     }
 
     pub fn render_unavailable_internal(&self) -> Option<(Vec<u8>, u32, u32)> {
-        pixmap_to_rgba(&create_filled_pixmap(
-            self.width,
-            self.height,
-            COLOR_SERVICE_UNAVAILABLE_BG,
-        )?)
+        pixmap_to_rgba(&create_unavailable_pixmap(self.width, self.height)?)
     }
 
     pub fn render_loading_internal(&self) -> Option<(Vec<u8>, u32, u32)> {

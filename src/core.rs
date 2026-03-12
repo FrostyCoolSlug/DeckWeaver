@@ -9,7 +9,6 @@ use serde_json::Value;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
-use std::net::TcpStream;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -20,7 +19,6 @@ const RENDER_INTERVAL: Duration = Duration::from_micros(33333);
 const DEFAULT_HOST: &str = "localhost";
 const DEFAULT_PORT: u16 = 14565;
 const RECONNECT_DELAY: Duration = Duration::from_secs(5);
-const SERVICE_CHECK_INTERVAL: Duration = Duration::from_secs(2);
 
 #[derive(Debug)]
 enum Command {
@@ -74,12 +72,12 @@ impl DeckWeaverCore {
         self.start_websocket_thread();
         self.start_meter_thread();
         self.start_render_thread();
-        self.start_monitor_thread();
         tracing::info!("DeckWeaverCore started");
     }
 
     fn stop(&mut self) {
         self.running.store(false, Ordering::SeqCst);
+        self.service_available.store(false, Ordering::SeqCst);
         tracing::info!("DeckWeaverCore stopped");
     }
 
@@ -233,6 +231,7 @@ impl DeckWeaverCore {
 
     fn start_websocket_thread(&self) {
         let running = self.running.clone();
+        let service_available = self.service_available.clone();
         let status = self.status.clone();
         let command_tx_holder = self.command_tx.clone();
 
@@ -253,6 +252,7 @@ impl DeckWeaverCore {
                             Ok((ws, _)) => ws,
                             Err(e) => {
                                 tracing::warn!("WebSocket connection failed: {}", e);
+                                service_available.store(false, Ordering::SeqCst);
                                 *command_tx_holder.write() = None;
                                 tokio::time::sleep(RECONNECT_DELAY).await;
                                 continue;
@@ -260,6 +260,7 @@ impl DeckWeaverCore {
                         };
 
                         tracing::info!("Connected to PipeWeaver");
+                        service_available.store(true, Ordering::SeqCst);
                         let (cmd_tx, mut cmd_rx) = tokio::sync::mpsc::channel(32);
                         *command_tx_holder.write() = Some(cmd_tx);
                         let (mut write, mut read) = ws.split();
@@ -306,6 +307,7 @@ impl DeckWeaverCore {
                         }
 
                         *command_tx_holder.write() = None;
+                        service_available.store(false, Ordering::SeqCst);
                         *status.write() = None;
 
                         if running.load(Ordering::SeqCst) {
@@ -314,6 +316,7 @@ impl DeckWeaverCore {
                     }
 
                     *command_tx_holder.write() = None;
+                    service_available.store(false, Ordering::SeqCst);
                 });
             })
             .expect("Failed to spawn websocket thread");
@@ -683,33 +686,6 @@ impl DeckWeaverCore {
                 }
             })
             .expect("Failed to spawn render thread");
-    }
-
-    fn start_monitor_thread(&self) {
-        let running = self.running.clone();
-        let service_available = self.service_available.clone();
-
-        std::thread::Builder::new()
-            .name("deckweaver-monitor".into())
-            .spawn(move || {
-                use std::net::ToSocketAddrs;
-
-                while running.load(Ordering::SeqCst) {
-                    let addr_str = format!("{}:{}", DEFAULT_HOST, DEFAULT_PORT);
-                    let available = addr_str
-                        .to_socket_addrs()
-                        .ok()
-                        .and_then(|mut addrs| addrs.next())
-                        .map(|addr| {
-                            TcpStream::connect_timeout(&addr, Duration::from_secs(2)).is_ok()
-                        })
-                        .unwrap_or(false);
-
-                    service_available.store(available, Ordering::Relaxed);
-                    std::thread::sleep(SERVICE_CHECK_INTERVAL);
-                }
-            })
-            .expect("Failed to spawn monitor thread");
     }
 }
 

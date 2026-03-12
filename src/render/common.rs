@@ -58,8 +58,6 @@ pub const COLOR_SOURCE_FILL: Rgba = Rgba::rgb(102, 179, 255);
 pub const COLOR_TARGET_FILL: Rgba = Rgba::rgb(102, 255, 102);
 pub const COLOR_GUTTER_DARK: Rgba = Rgba::rgb(120, 120, 120);
 pub const COLOR_GUTTER_LIGHT: Rgba = Rgba::rgb(220, 220, 220);
-pub const COLOR_SERVICE_UNAVAILABLE_BG: Rgba = Rgba::rgb(255, 193, 7);
-
 const GUTTER_LUMINANCE_THRESHOLD: f32 = 0.1;
 
 #[derive(Debug, Clone, Default)]
@@ -219,6 +217,38 @@ pub fn draw_diagonal_line(
     color: Rgba,
 ) {
     stroke_line(pixmap, x1, y1, x2, y2, width, color);
+}
+
+pub fn create_unavailable_pixmap(width: u32, height: u32) -> Option<Pixmap> {
+    let mut pixmap = Pixmap::new(width, height)?;
+    fill_background(&mut pixmap, COLOR_TRANSPARENT);
+
+    let min_side = width.min(height) as f32;
+    let inset = (min_side * 0.22).max(8.0);
+    let stroke_width = (min_side * 0.12).max(4.0);
+    let w = width as f32;
+    let h = height as f32;
+
+    draw_diagonal_line(
+        &mut pixmap,
+        inset,
+        inset,
+        w - inset,
+        h - inset,
+        stroke_width,
+        COLOR_RED,
+    );
+    draw_diagonal_line(
+        &mut pixmap,
+        w - inset,
+        inset,
+        inset,
+        h - inset,
+        stroke_width,
+        COLOR_RED,
+    );
+
+    Some(pixmap)
 }
 
 /// Convert Pixmap to raw RGBA bytes (no PNG encoding - much faster!)
