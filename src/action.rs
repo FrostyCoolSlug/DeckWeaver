@@ -60,6 +60,8 @@ pub struct ActionConfig {
     pub is_top: bool,
     #[pyo3(get, set)]
     pub icon_png: Option<Vec<u8>>,
+    #[pyo3(get, set)]
+    pub button_overlay: bool,
 }
 
 #[pymethods]
@@ -86,6 +88,7 @@ impl ActionConfig {
             orientation: "vertical".to_string(),
             is_top: true,
             icon_png: None,
+            button_overlay: true,
         }
     }
 }
@@ -151,6 +154,9 @@ impl ActionState {
         if self.config.action_type == crate::action::ActionType::Slider {
             self.config.orientation.hash(&mut hasher);
             self.config.is_top.hash(&mut hasher);
+        }
+        if self.config.action_type == crate::action::ActionType::Button {
+            self.config.button_overlay.hash(&mut hasher);
         }
         let current_hash = hasher.finish();
 
@@ -238,6 +244,7 @@ impl ActionState {
         self.config.meters_enabled.hash(&mut hasher);
         self.config.orientation.hash(&mut hasher);
         self.config.is_top.hash(&mut hasher);
+        self.config.button_overlay.hash(&mut hasher);
         self.get_meter().hash(&mut hasher);
 
         if let Some(ref device) = self.device {

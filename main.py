@@ -171,6 +171,23 @@ class DeckWeaver(PluginBase):
         self.add_action_holder(
             ActionHolder(
                 plugin_base=self,
+                action_base=SourceSwitchButtonAction,
+                action_id_suffix="SourceSwitchButton",
+                action_name=self.lm.get(
+                    "actions.source_switch_button.name",
+                    "PipeWeaver Output Device Switch Button",
+                ),
+                action_support={
+                    Input.Key: ActionInputSupport.SUPPORTED,
+                    Input.Dial: ActionInputSupport.UNSUPPORTED,
+                    Input.Touchscreen: ActionInputSupport.SUPPORTED,
+                },
+            )
+        )
+
+        self.add_action_holder(
+            ActionHolder(
+                plugin_base=self,
                 action_base=SliderAction,
                 action_id_suffix="Slider",
                 action_name=self.lm.get("actions.slider.name", "PipeWeaver Slider"),
@@ -392,6 +409,59 @@ class BaseAction(ActionBase):
             rgba.red = rgba.green = rgba.blue = rgba.alpha = 1.0
         return rgba
 
+    def _icon_row_default_subtitle(self) -> str:
+        return "Select an icon from StreamController's icon packs"
+
+    def _build_icon_row(self) -> Adw.ActionRow:
+        lm = self.plugin_base.lm
+        icon_row = Adw.ActionRow()
+        icon_row.set_title(lm.get("ui.custom_icon.title"))
+
+        icon_content_box = Gtk.Box(
+            orientation=Gtk.Orientation.HORIZONTAL,
+            spacing=12,
+            valign=Gtk.Align.CENTER,
+        )
+
+        self.icon_preview = Gtk.Image()
+        self.icon_preview.set_size_request(20, 20)
+        self.icon_preview.set_pixel_size(20)
+
+        default_subtitle = self._icon_row_default_subtitle()
+        if self._icon_path and os.path.exists(self._icon_path):
+            try:
+                pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(
+                    self._icon_path, width=20, height=20, preserve_aspect_ratio=True
+                )
+                self.icon_preview.set_from_pixbuf(pixbuf)
+                icon_name = os.path.splitext(os.path.basename(self._icon_path))[0]
+                icon_row.set_subtitle(f"Selected: {icon_name}")
+            except Exception:
+                icon_row.set_subtitle(default_subtitle)
+                self.icon_preview.set_visible(False)
+        else:
+            icon_row.set_subtitle(default_subtitle)
+            self.icon_preview.set_visible(False)
+
+        icon_content_box.append(self.icon_preview)
+
+        icon_button_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        icon_picker_button = Gtk.Button(icon_name="folder-symbolic", valign=Gtk.Align.CENTER)
+        icon_picker_button.set_tooltip_text("Choose icon")
+        icon_picker_button.add_css_class("suggested-action")
+        icon_picker_button.connect("clicked", self._on_icon_picker_clicked)
+        icon_button_box.append(icon_picker_button)
+
+        remove_icon_button = Gtk.Button(icon_name="edit-clear-symbolic", valign=Gtk.Align.CENTER)
+        remove_icon_button.set_tooltip_text("Remove icon")
+        remove_icon_button.connect("clicked", self._on_remove_icon_clicked)
+        icon_button_box.append(remove_icon_button)
+
+        icon_content_box.append(icon_button_box)
+        icon_row.add_suffix(icon_content_box)
+        self.icon_row = icon_row
+        return icon_row
+
     def get_config_rows(self):
         """Return configuration UI rows - matching original GitHub style"""
         lm = self.plugin_base.lm
@@ -433,47 +503,7 @@ class BaseAction(ActionBase):
         self.device_expander.add_suffix(refresh_button)
 
         # Custom Icon Row
-        icon_row = Adw.ActionRow()
-        icon_row.set_title(lm.get("ui.custom_icon.title"))
-        
-        icon_content_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12, valign=Gtk.Align.CENTER)
-        
-        self.icon_preview = Gtk.Image()
-        self.icon_preview.set_size_request(20, 20)
-        self.icon_preview.set_pixel_size(20)
-        
-        if self._icon_path and os.path.exists(self._icon_path):
-            try:
-                pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(
-                    self._icon_path, width=20, height=20, preserve_aspect_ratio=True
-                )
-                self.icon_preview.set_from_pixbuf(pixbuf)
-                icon_name = os.path.splitext(os.path.basename(self._icon_path))[0]
-                icon_row.set_subtitle(f"Selected: {icon_name}")
-            except Exception:
-                icon_row.set_subtitle("Select an icon from StreamController's icon packs")
-                self.icon_preview.set_visible(False)
-        else:
-            icon_row.set_subtitle("Select an icon from StreamController's icon packs")
-            self.icon_preview.set_visible(False)
-        
-        icon_content_box.append(self.icon_preview)
-        
-        icon_button_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        icon_picker_button = Gtk.Button(icon_name="folder-symbolic", valign=Gtk.Align.CENTER)
-        icon_picker_button.set_tooltip_text("Choose icon")
-        icon_picker_button.add_css_class("suggested-action")
-        icon_picker_button.connect("clicked", self._on_icon_picker_clicked)
-        icon_button_box.append(icon_picker_button)
-        
-        remove_icon_button = Gtk.Button(icon_name="edit-clear-symbolic", valign=Gtk.Align.CENTER)
-        remove_icon_button.set_tooltip_text("Remove icon")
-        remove_icon_button.connect("clicked", self._on_remove_icon_clicked)
-        icon_button_box.append(remove_icon_button)
-        
-        icon_content_box.append(icon_button_box)
-        icon_row.add_suffix(icon_content_box)
-        self.icon_row = icon_row
+        icon_row = self._build_icon_row()
 
         # Volume Step Row
         # For ButtonAction and SliderAction, use signed range (-20 to 20)
@@ -620,7 +650,7 @@ class BaseAction(ActionBase):
                     row.add_css_class("selected")
             self.device_container.append(group)
 
-    def _create_device_row(self, device) -> Adw.ActionRow:
+    def _build_device_row(self, device, callback) -> Adw.ActionRow:
         """Create a styled device row"""
         row = Adw.ActionRow()
         row.set_title(device.name)
@@ -638,9 +668,12 @@ class BaseAction(ActionBase):
         
         row.device_data = device
         row.set_activatable(True)
-        row.connect("activated", self._on_device_row_activated)
+        row.connect("activated", callback)
         
         return row
+
+    def _create_device_row(self, device) -> Adw.ActionRow:
+        return self._build_device_row(device, self._on_device_row_activated)
 
     def _on_device_row_activated(self, row: Adw.ActionRow):
         """Handle device row activation"""
@@ -716,7 +749,7 @@ class BaseAction(ActionBase):
         if hasattr(self, 'icon_preview'):
             self.icon_preview.set_visible(False)
         if hasattr(self, 'icon_row'):
-            self.icon_row.set_subtitle("Select an icon from StreamController's icon packs")
+            self.icon_row.set_subtitle(self._icon_row_default_subtitle())
         
         self._update_config()
 
@@ -867,6 +900,253 @@ class ButtonAction(BaseAction):
                 self._core.toggle_mute(self._device_id)
             else:
                 self._core.set_volume_relative(self._device_id, self._volume_step)
+
+
+class SourceSwitchButtonAction(ButtonAction):
+    """Button that switches a hardware output target to a selected physical device."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._hardware_device_node_id: Optional[int] = None
+        self._hardware_device_name: Optional[str] = None
+
+    def _load_settings(self):
+        super()._load_settings()
+        settings = self.get_settings()
+        node_id = settings.get("hardware_device_node_id")
+        self._hardware_device_node_id = int(node_id) if node_id is not None else None
+        self._hardware_device_name = settings.get("hardware_device_name")
+
+        if self._hardware_device_node_id is not None and not self._hardware_device_name:
+            for device in self._core.get_output_hardware_devices():
+                if device.node_id == self._hardware_device_node_id:
+                    self._hardware_device_name = (
+                        device.name or device.description or str(device.node_id)
+                    )
+                    break
+
+    def get_config_rows(self):
+        lm = self.plugin_base.lm
+        self._load_settings()
+
+        if not self._core.is_available():
+            error_row = Adw.ActionRow()
+            error_row.set_title(lm.get("ui.error.not_running.title"))
+            error_row.set_subtitle(lm.get("ui.error.not_running.subtitle"))
+            error_row.add_css_class("warning")
+            return [error_row]
+
+        self.output_expander = Adw.ExpanderRow()
+        self.output_expander.set_title(
+            lm.get("ui.output_device.title", "Hardware Output Device")
+        )
+        self.output_expander.set_subtitle(
+            self._device_name
+            or lm.get("ui.output_device.none", "No hardware output selected")
+        )
+
+        self.output_device_container = Gtk.Box(
+            orientation=Gtk.Orientation.VERTICAL,
+            spacing=0,
+        )
+        self.output_device_container.set_margin_start(30)
+        self.output_device_container.set_margin_end(30)
+        self.output_device_container.set_margin_bottom(12)
+
+        output_scrolled = Gtk.ScrolledWindow()
+        output_scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        output_scrolled.set_min_content_height(220)
+        output_scrolled.set_child(self.output_device_container)
+
+        self.output_expander.add_row(output_scrolled)
+        self.output_expander.connect(
+            "notify::expanded", self._on_output_expander_expanded
+        )
+        self._populate_output_device_list()
+
+        output_refresh = Gtk.Button(
+            icon_name="view-refresh-symbolic",
+            valign=Gtk.Align.CENTER,
+            tooltip_text=lm.get("ui.refresh_devices.button"),
+        )
+        output_refresh.connect("clicked", self._on_output_refresh_clicked)
+        self.output_expander.add_suffix(output_refresh)
+
+        self.source_expander = Adw.ExpanderRow()
+        self.source_expander.set_title(
+            lm.get("ui.physical_device.title", "Physical Output Device")
+        )
+        self.source_expander.set_subtitle(
+            self._hardware_device_name
+            or lm.get("ui.physical_device.none", "No physical device selected")
+        )
+
+        self.source_device_container = Gtk.Box(
+            orientation=Gtk.Orientation.VERTICAL,
+            spacing=0,
+        )
+        self.source_device_container.set_margin_start(30)
+        self.source_device_container.set_margin_end(30)
+        self.source_device_container.set_margin_bottom(12)
+
+        source_scrolled = Gtk.ScrolledWindow()
+        source_scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        source_scrolled.set_min_content_height(260)
+        source_scrolled.set_child(self.source_device_container)
+
+        self.source_expander.add_row(source_scrolled)
+        self.source_expander.connect(
+            "notify::expanded", self._on_source_expander_expanded
+        )
+        self._populate_source_device_list()
+
+        source_refresh = Gtk.Button(
+            icon_name="view-refresh-symbolic",
+            valign=Gtk.Align.CENTER,
+            tooltip_text=lm.get("ui.refresh_devices.button"),
+        )
+        source_refresh.connect("clicked", self._on_source_refresh_clicked)
+        self.source_expander.add_suffix(source_refresh)
+
+        icon_row = self._build_icon_row()
+
+        return [
+            self.output_expander,
+            self.source_expander,
+            icon_row,
+        ]
+
+    def _build_config(self) -> ActionConfig:
+        config = super()._build_config()
+        config.button_overlay = False
+        return config
+
+    def _clear_selector_container(self, container: Gtk.Box):
+        child = container.get_first_child()
+        while child:
+            next_child = child.get_next_sibling()
+            container.remove(child)
+            child = next_child
+
+    def _populate_output_device_list(self):
+        self._clear_selector_container(self.output_device_container)
+        targets = [device for device in self._core.get_targets() if device.is_physical]
+
+        if not targets:
+            row = Adw.ActionRow()
+            row.set_title(
+                self.plugin_base.lm.get(
+                    "ui.output_device.empty", "No hardware outputs found"
+                )
+            )
+            row.set_subtitle("Check that PipeWeaver has detected your output device")
+            row.set_sensitive(False)
+            self.output_device_container.append(row)
+            return
+
+        group = Adw.PreferencesGroup()
+        group.set_margin_top(12)
+        group.set_margin_bottom(6)
+        for device in targets:
+            row = self._build_device_row(device, self._on_output_row_activated)
+            if device.id == self._device_id:
+                row.add_css_class("selected")
+            group.add(row)
+        self.output_device_container.append(group)
+
+    def _populate_source_device_list(self):
+        self._clear_selector_container(self.source_device_container)
+        sources = self._core.get_output_hardware_devices()
+
+        if not sources:
+            row = Adw.ActionRow()
+            row.set_title(
+                self.plugin_base.lm.get(
+                    "ui.physical_device.empty", "No physical devices found"
+                )
+            )
+            row.set_subtitle("Check that PipeWeaver has detected your hardware outputs")
+            row.set_sensitive(False)
+            self.source_device_container.append(row)
+            return
+
+        group = Adw.PreferencesGroup()
+        group.set_margin_top(12)
+        group.set_margin_bottom(6)
+        for device in sources:
+            row = Adw.ActionRow()
+            row.set_title(device.name or device.description or f"Node {device.node_id}")
+            row.set_subtitle(device.description or "Physical output device")
+            row.device_data = device
+            row.set_activatable(True)
+            row.connect("activated", self._on_source_row_activated)
+            if device.node_id == self._hardware_device_node_id:
+                row.add_css_class("selected")
+            group.add(row)
+        self.source_device_container.append(group)
+
+    def _on_output_row_activated(self, row: Adw.ActionRow):
+        device = row.device_data
+        if not device:
+            return
+
+        self._device_id = device.id
+        self._device_name = device.name
+        settings = self.get_settings()
+        settings["device_id"] = device.id
+        settings["device_name"] = device.name
+        self.set_settings(settings)
+
+        if hasattr(self, "output_expander"):
+            self.output_expander.set_subtitle(device.name)
+
+        self._update_config()
+
+    def _on_source_row_activated(self, row: Adw.ActionRow):
+        device = row.device_data
+        if not device:
+            return
+
+        self._hardware_device_node_id = device.node_id
+        self._hardware_device_name = device.name or device.description or (
+            str(device.node_id) if device.node_id is not None else None
+        )
+        settings = self.get_settings()
+        settings["hardware_device_node_id"] = self._hardware_device_node_id
+        settings["hardware_device_name"] = self._hardware_device_name
+        self.set_settings(settings)
+
+        if hasattr(self, "source_expander"):
+            self.source_expander.set_subtitle(
+                self._hardware_device_name
+                or self.plugin_base.lm.get(
+                    "ui.physical_device.none", "No physical device selected"
+                )
+            )
+
+    def _on_output_expander_expanded(self, expander: Adw.ExpanderRow, _):
+        if expander.get_expanded():
+            self._populate_output_device_list()
+
+    def _on_source_expander_expanded(self, expander: Adw.ExpanderRow, _):
+        if expander.get_expanded():
+            self._populate_source_device_list()
+
+    def _on_output_refresh_clicked(self, button: Gtk.Button):
+        self._populate_output_device_list()
+
+    def _on_source_refresh_clicked(self, button: Gtk.Button):
+        self._populate_source_device_list()
+
+    def event_callback(self, event: Any, data: Any):
+        if "Short Up" not in str(event):
+            return
+        if not self._device_id or self._hardware_device_node_id is None:
+            return
+
+        self._core.switch_output_hardware_device(
+            self._device_id, self._hardware_device_node_id
+        )
 
 
 class SliderAction(BaseAction):

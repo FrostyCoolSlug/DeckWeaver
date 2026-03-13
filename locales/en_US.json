@@ -18,6 +18,8 @@
     "actions.knob.tooltip": "Control PipeWeaver audio with knob/dial",
     "actions.button.name": "PipeWeaver Button",
     "actions.button.tooltip": "Control PipeWeaver audio with button",
+    "actions.source_switch_button.name": "PipeWeaver Output Device Switch Button",
+    "actions.source_switch_button.tooltip": "Switch the physical device attached to a hardware output target",
     "actions.slider.name": "PipeWeaver Slider",
     "actions.slider.tooltip": "Control PipeWeaver audio with slider",
     
@@ -25,6 +27,12 @@
     "ui.error.not_running.subtitle": "Please start PipeWeaver daemon to configure this action",
     
     "ui.device.title": "Device",
+    "ui.output_device.title": "Hardware Output Device",
+    "ui.output_device.none": "No hardware output selected",
+    "ui.output_device.empty": "No hardware outputs found",
+    "ui.physical_device.title": "Physical Output Device",
+    "ui.physical_device.none": "No physical device selected",
+    "ui.physical_device.empty": "No physical devices found",
     "ui.device_filter.title": "Device Type",
     "ui.device_filter.subtitle": "Filter by sink (output) or source (input) devices",
     

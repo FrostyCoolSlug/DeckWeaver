@@ -1,8 +1,10 @@
 use parking_lot::RwLock;
+use pipeweaver_ipc::commands::{AudioConfiguration, PhysicalDevice as PipeweaverPhysicalDevice};
 use pipeweaver_profile::{
-    Devices, PhysicalSourceDevice, PhysicalTargetDevice, VirtualSourceDevice, VirtualTargetDevice,
+    Devices, PhysicalDeviceDescriptor, PhysicalSourceDevice, PhysicalTargetDevice,
+    VirtualSourceDevice, VirtualTargetDevice,
 };
-use pipeweaver_shared::MuteTarget;
+use pipeweaver_shared::{DeviceType as PipeweaverDeviceType, MuteTarget};
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -113,24 +115,35 @@ impl DeviceColor {
     }
 }
 
+#[pyclass]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HardwareDevice {
+    #[pyo3(get)]
+    pub node_id: Option<u32>,
+    #[pyo3(get)]
+    pub name: Option<String>,
+    #[pyo3(get)]
+    pub description: Option<String>,
+    #[pyo3(get)]
+    pub attachment_index: Option<usize>,
+}
+
+#[pymethods]
+impl HardwareDevice {
+    fn __repr__(&self) -> String {
+        format!(
+            "HardwareDevice(node_id={:?}, name={:?}, description={:?}, attachment_index={:?})",
+            self.node_id, self.name, self.description, self.attachment_index
+        )
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Status {
     #[serde(default)]
-    pub audio: AudioStatus,
+    pub audio: AudioConfiguration,
     #[serde(skip)]
     device_index: RwLock<Option<HashMap<String, Device>>>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct AudioStatus {
-    #[serde(default)]
-    pub profile: ProfileStatus,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct ProfileStatus {
-    #[serde(default)]
-    pub devices: Devices,
 }
 
 // Use pipeweaver types directly - Devices is the devices tree
@@ -138,7 +151,7 @@ pub struct ProfileStatus {
 impl Default for Status {
     fn default() -> Self {
         Self {
-            audio: AudioStatus::default(),
+            audio: AudioConfiguration::default(),
             device_index: RwLock::new(None),
         }
     }
@@ -156,6 +169,62 @@ impl Clone for Status {
 impl Status {
     pub fn devices_tree(&self) -> &Devices {
         &self.audio.profile.devices
+    }
+
+    pub fn get_target_sources(&self, target_id: &str) -> Vec<Device> {
+        let mut sources = Vec::new();
+
+        for (source_id, targets) in &self.audio.profile.routes {
+            if targets.iter().any(|target| target.to_string() == target_id) {
+                if let Some(device) = self.get_device(&source_id.to_string(), Some(DeviceType::Source))
+                {
+                    sources.push(device);
+                }
+            }
+        }
+
+        sources
+    }
+
+    pub fn get_output_hardware_devices(&self) -> Vec<HardwareDevice> {
+        self.audio.devices[PipeweaverDeviceType::Target]
+            .iter()
+            .map(Self::convert_hardware_device)
+            .collect()
+    }
+
+    pub fn get_attached_output_hardware_devices(&self, target_id: &str) -> Vec<HardwareDevice> {
+        let Some(target) = self
+            .devices_tree()
+            .targets
+            .physical_devices
+            .iter()
+            .find(|device| device.description.id.to_string() == target_id)
+        else {
+            return Vec::new();
+        };
+
+        let available = &self.audio.devices[PipeweaverDeviceType::Target];
+        target
+            .attached_devices
+            .iter()
+            .enumerate()
+            .map(|(index, descriptor)| {
+                if let Some(device) = Self::match_descriptor_to_hardware_device(descriptor, available)
+                {
+                    let mut converted = Self::convert_hardware_device(device);
+                    converted.attachment_index = Some(index);
+                    converted
+                } else {
+                    HardwareDevice {
+                        node_id: None,
+                        name: descriptor.name.clone(),
+                        description: descriptor.description.clone(),
+                        attachment_index: Some(index),
+                    }
+                }
+            })
+            .collect()
     }
 
     pub(crate) fn rebuild_index(&self) {
@@ -321,6 +390,34 @@ impl Status {
             is_muted,
             color,
         })
+    }
+
+    fn convert_hardware_device(device: &PipeweaverPhysicalDevice) -> HardwareDevice {
+        HardwareDevice {
+            node_id: Some(device.node_id),
+            name: device.name.clone(),
+            description: device.description.clone(),
+            attachment_index: None,
+        }
+    }
+
+    fn match_descriptor_to_hardware_device<'a>(
+        descriptor: &PhysicalDeviceDescriptor,
+        devices: &'a [PipeweaverPhysicalDevice],
+    ) -> Option<&'a PipeweaverPhysicalDevice> {
+        if let Some(name) = descriptor.name.as_ref() {
+            if let Some(device) = devices.iter().find(|device| device.name.as_ref() == Some(name)) {
+                return Some(device);
+            }
+        }
+
+        if let Some(description) = descriptor.description.as_ref() {
+            return devices
+                .iter()
+                .find(|device| device.description.as_ref() == Some(description));
+        }
+
+        None
     }
 }
 

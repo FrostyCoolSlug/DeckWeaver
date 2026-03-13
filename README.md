@@ -12,6 +12,7 @@ PipeWeaver is a virtual audio routing system that allows you to create and manag
 - **Volume Control**: Adjust audio levels with precise steps (5-20% per step, configurable)
 - **Mute Toggle**: Quickly mute/unmute audio devices with visual feedback
 - **Device Selection**: Control any available PipeWeaver virtual device (source or target)
+- **Hardware Output Switching**: Reassign a hardware output target to a selected physical output device with a dedicated button
 - **Real-time Feedback**: Visual indicators show current audio levels, mute status, and device state
 - **Service Monitoring**: Automatic detection of PipeWeaver daemon availability with visual status indicators
 
@@ -68,6 +69,7 @@ The Rust extension is built once and works on **any Python 3.11+** (abi3 / stabl
 - **Meter Color**: Customize meter color or invert volume bar color for meters
 - **Volume Bar Color**: Override volume bar color or use device color automatically
 - **Language**: Set interface language or use OS default (in plugin settings)
+- **Output Device Switch Button**: Pick a hardware output target and the physical device that should be attached when pressed
 
 ## Device Types
 

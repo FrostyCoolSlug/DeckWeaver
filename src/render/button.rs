@@ -24,15 +24,16 @@ impl ButtonRenderer {
         Self { button_size }
     }
 
-    #[pyo3(signature = (is_plus=None, icon_png=None, is_muted=false))]
+    #[pyo3(signature = (is_plus=None, icon_png=None, is_muted=false, show_overlay=true))]
     pub fn render(
         &self,
         is_plus: Option<bool>,
         icon_png: Option<Vec<u8>>,
         is_muted: bool,
+        show_overlay: bool,
     ) -> PyResult<(Vec<u8>, u32, u32)> {
         let pixmap = self
-            .render_internal(is_plus, icon_png, None, is_muted)
+            .render_internal(is_plus, icon_png, None, is_muted, show_overlay)
             .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("Failed to render"))?;
 
         pixmap_to_rgba(&pixmap)
@@ -68,8 +69,9 @@ impl ButtonRenderer {
         is_plus: Option<bool>,
         icon_png: Option<Vec<u8>>,
         is_muted: bool,
+        show_overlay: bool,
     ) -> Option<(Vec<u8>, u32, u32)> {
-        pixmap_to_rgba(&self.render_internal(is_plus, icon_png, None, is_muted)?)
+        pixmap_to_rgba(&self.render_internal(is_plus, icon_png, None, is_muted, show_overlay)?)
     }
 
     pub fn render_internal_png_with_cached(
@@ -77,8 +79,9 @@ impl ButtonRenderer {
         is_plus: Option<bool>,
         cached_icon: Option<&crate::action::CachedIcon>,
         is_muted: bool,
+        show_overlay: bool,
     ) -> Option<(Vec<u8>, u32, u32)> {
-        pixmap_to_rgba(&self.render_internal(is_plus, None, cached_icon, is_muted)?)
+        pixmap_to_rgba(&self.render_internal(is_plus, None, cached_icon, is_muted, show_overlay)?)
     }
 
     pub fn render_unavailable_internal(&self) -> Option<(Vec<u8>, u32, u32)> {
@@ -102,6 +105,7 @@ impl ButtonRenderer {
         icon_png: Option<Vec<u8>>,
         cached_icon: Option<&crate::action::CachedIcon>,
         is_muted: bool,
+        show_overlay: bool,
     ) -> Option<Pixmap> {
         let size = self.button_size as f32;
         let mut pixmap = Pixmap::new(self.button_size, self.button_size)?;
@@ -115,27 +119,29 @@ impl ButtonRenderer {
             self.composite_icon(&mut pixmap, &png_data);
         }
 
-        match is_plus {
-            Some(is_plus) => {
-                let (cx, cy, sym_size, line_width) = self.symbol_layout(size, has_icon);
-                draw_symbol(
-                    &mut pixmap,
-                    cx,
-                    cy,
-                    sym_size,
-                    line_width,
-                    COLOR_WHITE,
-                    is_plus,
-                );
-            }
-            None => {
-                if has_icon {
-                    if is_muted {
-                        self.draw_icon_mute_slash(&mut pixmap, size);
+        if show_overlay {
+            match is_plus {
+                Some(is_plus) => {
+                    let (cx, cy, sym_size, line_width) = self.symbol_layout(size, has_icon);
+                    draw_symbol(
+                        &mut pixmap,
+                        cx,
+                        cy,
+                        sym_size,
+                        line_width,
+                        COLOR_WHITE,
+                        is_plus,
+                    );
+                }
+                None => {
+                    if has_icon {
+                        if is_muted {
+                            self.draw_icon_mute_slash(&mut pixmap, size);
+                        }
+                        self.draw_corner_toggle_hint(&mut pixmap, size);
+                    } else if is_muted {
+                        self.draw_center_mute_slash(&mut pixmap, size);
                     }
-                    self.draw_corner_toggle_hint(&mut pixmap, size);
-                } else if is_muted {
-                    self.draw_center_mute_slash(&mut pixmap, size);
                 }
             }
         }

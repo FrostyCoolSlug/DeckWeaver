@@ -14,7 +14,7 @@ use pyo3::types::PyModule;
 
 pub use action::{ActionConfig, ActionType};
 pub use core::DeckWeaverCore;
-pub use devices::{Device, DeviceColor, DeviceType};
+pub use devices::{Device, DeviceColor, DeviceType, HardwareDevice};
 pub use icon_loader::load_icon_to_png;
 pub use render::{ButtonRenderer, KnobRenderer, SliderRenderer};
 
@@ -29,6 +29,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Device>()?;
     m.add_class::<DeviceColor>()?;
     m.add_class::<DeviceType>()?;
+    m.add_class::<HardwareDevice>()?;
     m.add_class::<KnobRenderer>()?;
     m.add_class::<SliderRenderer>()?;
     m.add_class::<ButtonRenderer>()?;

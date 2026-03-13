@@ -18,6 +18,8 @@
     "actions.knob.tooltip": "Controla el audio de PipeWeaver con la perilla/dial",
     "actions.button.name": "Botón PipeWeaver",
     "actions.button.tooltip": "Controla el audio de PipeWeaver con botón",
+    "actions.source_switch_button.name": "Botón Cambio de Salida PipeWeaver",
+    "actions.source_switch_button.tooltip": "Cambia el dispositivo físico conectado a una salida de hardware",
     "actions.slider.name": "Deslizador PipeWeaver",
     "actions.slider.tooltip": "Controla el audio de PipeWeaver con deslizador",
     
@@ -25,6 +27,12 @@
     "ui.error.not_running.subtitle": "Por favor inicia el demonio de PipeWeaver para configurar esta acción",
     
     "ui.device.title": "Dispositivo",
+    "ui.output_device.title": "Dispositivo de Salida Física",
+    "ui.output_device.none": "Ninguna salida física seleccionada",
+    "ui.output_device.empty": "No se encontraron salidas físicas",
+    "ui.physical_device.title": "Dispositivo Físico de Salida",
+    "ui.physical_device.none": "Ningún dispositivo físico seleccionado",
+    "ui.physical_device.empty": "No se encontraron dispositivos físicos",
     
     "ui.custom_icon.title": "Icono Personalizado",
     "ui.custom_icon.subtitle": "Selecciona un archivo de icono personalizado o usa un icono de una biblioteca instalada",

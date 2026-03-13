@@ -1,5 +1,5 @@
 use crate::action::{ActionConfig, ActionState, ActionType};
-use crate::devices::{apply_patch_op, Device, DeviceType, Status};
+use crate::devices::{apply_patch_op, Device, DeviceType, HardwareDevice, Status};
 use crate::render::{pixmap_to_rgba, ButtonRenderer, KnobRenderer, RenderParams, SliderRenderer};
 use futures_util::{SinkExt, StreamExt};
 use parking_lot::RwLock;
@@ -25,6 +25,13 @@ enum Command {
     SetVolume { device_id: String, volume: u8 },
     SetVolumeRelative { device_id: String, delta: i8 },
     ToggleMute { device_id: String },
+    SetRoute {
+        source_id: String,
+        target_id: String,
+        enabled: bool,
+    },
+    AttachPhysicalNode { target_id: String, node_id: u32 },
+    RemovePhysicalNode { target_id: String, index: usize },
 }
 
 #[derive(Debug, Clone)]
@@ -178,6 +185,24 @@ impl DeckWeaverCore {
             .and_then(|s| s.get_device(device_id, None))
     }
 
+    #[pyo3(name = "get_target_sources")]
+    fn py_get_target_sources(&self, target_id: &str) -> Vec<Device> {
+        self.status
+            .read()
+            .as_ref()
+            .map(|s| s.get_target_sources(target_id))
+            .unwrap_or_default()
+    }
+
+    #[pyo3(name = "get_output_hardware_devices")]
+    fn py_get_output_hardware_devices(&self) -> Vec<HardwareDevice> {
+        self.status
+            .read()
+            .as_ref()
+            .map(Status::get_output_hardware_devices)
+            .unwrap_or_default()
+    }
+
     fn set_volume(&self, device_id: &str, volume: u8) -> bool {
         self.send_command(Command::SetVolume {
             device_id: device_id.to_string(),
@@ -196,6 +221,53 @@ impl DeckWeaverCore {
         self.send_command(Command::ToggleMute {
             device_id: device_id.to_string(),
         })
+    }
+
+    fn set_route(&self, source_id: &str, target_id: &str, enabled: bool) -> bool {
+        self.send_command(Command::SetRoute {
+            source_id: source_id.to_string(),
+            target_id: target_id.to_string(),
+            enabled,
+        })
+    }
+
+    fn switch_output_hardware_device(&self, target_id: &str, node_id: u32) -> bool {
+        let Some(status) = self.status.read().as_ref().cloned() else {
+            return false;
+        };
+
+        let attached = status.get_attached_output_hardware_devices(target_id);
+        let already_attached = attached
+            .iter()
+            .any(|device| device.node_id.is_some_and(|attached_id| attached_id == node_id));
+
+        let mut success = true;
+
+        if !already_attached {
+            success &= self.send_command(Command::AttachPhysicalNode {
+                target_id: target_id.to_string(),
+                node_id,
+            });
+        }
+
+        let mut remove_indices: Vec<usize> = attached
+            .iter()
+            .filter_map(|device| match (device.attachment_index, device.node_id) {
+                (Some(index), Some(attached_id)) if attached_id != node_id => Some(index),
+                (Some(index), None) => Some(index),
+                _ => None,
+            })
+            .collect();
+        remove_indices.sort_unstable_by(|a, b| b.cmp(a));
+
+        for index in remove_indices {
+            success &= self.send_command(Command::RemovePhysicalNode {
+                target_id: target_id.to_string(),
+                index,
+            });
+        }
+
+        success
     }
 
     fn force_render(&self, action_id: &str) {
@@ -753,25 +825,20 @@ fn apply_patch(status: &Arc<RwLock<Option<Status>>>, patch: &[Value]) {
 }
 
 fn build_command(status: &Arc<RwLock<Option<Status>>>, id: u64, cmd: Command) -> Option<String> {
-    let device = status.read().as_ref()?.get_device(
-        match &cmd {
-            Command::SetVolume { device_id, .. } => device_id,
-            Command::SetVolumeRelative { device_id, .. } => device_id,
-            Command::ToggleMute { device_id } => device_id,
-        },
-        None,
-    )?;
-
     let data = match cmd {
-        Command::SetVolume { device_id, volume } => match device.device_type {
-            DeviceType::Source => {
-                serde_json::json!({"Pipewire": {"SetSourceVolume": [device_id, "A", volume]}})
+        Command::SetVolume { device_id, volume } => {
+            let device = status.read().as_ref()?.get_device(&device_id, None)?;
+            match device.device_type {
+                DeviceType::Source => {
+                    serde_json::json!({"Pipewire": {"SetSourceVolume": [device_id, "A", volume]}})
+                }
+                DeviceType::Target => {
+                    serde_json::json!({"Pipewire": {"SetTargetVolume": [device_id, volume]}})
+                }
             }
-            DeviceType::Target => {
-                serde_json::json!({"Pipewire": {"SetTargetVolume": [device_id, volume]}})
-            }
-        },
+        }
         Command::SetVolumeRelative { device_id, delta } => {
+            let device = status.read().as_ref()?.get_device(&device_id, None)?;
             let new_volume = (device.volume as i16 + delta as i16).clamp(0, 100) as u8;
             match device.device_type {
                 DeviceType::Source => {
@@ -782,19 +849,33 @@ fn build_command(status: &Arc<RwLock<Option<Status>>>, id: u64, cmd: Command) ->
                 }
             }
         }
-        Command::ToggleMute { device_id } => match device.device_type {
-            DeviceType::Source => {
-                if device.is_muted {
-                    serde_json::json!({"Pipewire": {"DelSourceMuteTarget": [device_id, "TargetA"]}})
-                } else {
-                    serde_json::json!({"Pipewire": {"AddSourceMuteTarget": [device_id, "TargetA"]}})
+        Command::ToggleMute { device_id } => {
+            let device = status.read().as_ref()?.get_device(&device_id, None)?;
+            match device.device_type {
+                DeviceType::Source => {
+                    if device.is_muted {
+                        serde_json::json!({"Pipewire": {"DelSourceMuteTarget": [device_id, "TargetA"]}})
+                    } else {
+                        serde_json::json!({"Pipewire": {"AddSourceMuteTarget": [device_id, "TargetA"]}})
+                    }
+                }
+                DeviceType::Target => {
+                    let state = if device.is_muted { "Unmuted" } else { "Muted" };
+                    serde_json::json!({"Pipewire": {"SetTargetMuteState": [device_id, state]}})
                 }
             }
-            DeviceType::Target => {
-                let state = if device.is_muted { "Unmuted" } else { "Muted" };
-                serde_json::json!({"Pipewire": {"SetTargetMuteState": [device_id, state]}})
-            }
-        },
+        }
+        Command::SetRoute {
+            source_id,
+            target_id,
+            enabled,
+        } => serde_json::json!({"Pipewire": {"SetRoute": [source_id, target_id, enabled]}}),
+        Command::AttachPhysicalNode { target_id, node_id } => {
+            serde_json::json!({"Pipewire": {"AttachPhysicalNode": [target_id, node_id]}})
+        }
+        Command::RemovePhysicalNode { target_id, index } => {
+            serde_json::json!({"Pipewire": {"RemovePhysicalNode": [target_id, index]}})
+        }
     };
 
     serde_json::to_string(&serde_json::json!({ "id": id, "data": data })).ok()
@@ -940,12 +1021,14 @@ impl Renderers {
                         is_plus,
                         Some(cached),
                         device.is_muted,
+                        config.button_overlay,
                     )
                 } else {
                     self.button(config.width).render_internal_png(
                         is_plus,
                         config.icon_png.clone(),
                         device.is_muted,
+                        config.button_overlay,
                     )
                 }
             }

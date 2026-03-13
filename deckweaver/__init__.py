@@ -39,6 +39,7 @@ ActionType = _core.ActionType
 Device = _core.Device
 DeviceColor = _core.DeviceColor
 DeviceType = _core.DeviceType
+HardwareDevice = _core.HardwareDevice
 KnobRenderer = _core.KnobRenderer
 SliderRenderer = _core.SliderRenderer
 ButtonRenderer = _core.ButtonRenderer
@@ -54,6 +55,7 @@ __all__ = [
     "Device",
     "DeviceColor",
     "DeviceType",
+    "HardwareDevice",
     "KnobRenderer",
     "SliderRenderer",
     "ButtonRenderer",
