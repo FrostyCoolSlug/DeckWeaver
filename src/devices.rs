@@ -4,7 +4,7 @@ use pipeweaver_profile::{
     Devices, PhysicalDeviceDescriptor, PhysicalSourceDevice, PhysicalTargetDevice,
     VirtualSourceDevice, VirtualTargetDevice,
 };
-use pipeweaver_shared::{DeviceType as PipeweaverDeviceType, MuteTarget};
+use pipeweaver_shared::{DeviceType as PipeweaverDeviceType, Mix, MuteTarget};
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -76,6 +76,56 @@ pub struct Device {
     pub is_muted: bool,
     #[pyo3(get)]
     pub color: Option<DeviceColor>,
+    #[pyo3(get)]
+    pub source_mix_a_volume: Option<u8>,
+    #[pyo3(get)]
+    pub source_mix_b_volume: Option<u8>,
+    #[pyo3(get)]
+    pub source_mix_a_muted: Option<bool>,
+    #[pyo3(get)]
+    pub source_mix_b_muted: Option<bool>,
+    #[pyo3(get)]
+    pub source_mute_a_all: Option<bool>,
+    #[pyo3(get)]
+    pub source_mute_b_all: Option<bool>,
+    #[pyo3(get)]
+    pub source_mute_a_target_count: Option<u8>,
+    #[pyo3(get)]
+    pub source_mute_b_target_count: Option<u8>,
+    #[pyo3(get)]
+    pub source_volumes_linked: Option<bool>,
+    #[pyo3(get)]
+    pub target_mix_b: Option<bool>,
+}
+
+impl Device {
+    pub fn source_volume_for_mix(&self, mix_b: bool) -> Option<u8> {
+        if mix_b {
+            self.source_mix_b_volume
+        } else {
+            self.source_mix_a_volume
+        }
+    }
+
+    pub fn source_muted_for_mix(&self, mix_b: bool) -> Option<bool> {
+        if mix_b {
+            self.source_mix_b_muted
+        } else {
+            self.source_mix_a_muted
+        }
+    }
+
+    pub fn with_selected_source_mix(mut self, mix_b: bool) -> Self {
+        if self.device_type == DeviceType::Source {
+            if let Some(volume) = self.source_volume_for_mix(mix_b) {
+                self.volume = volume;
+            }
+            if let Some(is_muted) = self.source_muted_for_mix(mix_b) {
+                self.is_muted = is_muted;
+            }
+        }
+        self
+    }
 }
 
 #[pymethods]
@@ -143,7 +193,7 @@ pub struct Status {
     #[serde(default)]
     pub audio: AudioConfiguration,
     #[serde(skip)]
-    device_index: RwLock<Option<HashMap<String, Device>>>,
+    device_index: RwLock<Option<HashMap<String, Vec<Device>>>>,
 }
 
 // Use pipeweaver types directly - Devices is the devices tree
@@ -167,6 +217,14 @@ impl Clone for Status {
 }
 
 impl Status {
+    fn normalize_volume(raw: u8) -> u8 {
+        if raw > 100 {
+            ((raw as u16 * 100) / 255) as u8
+        } else {
+            raw
+        }
+    }
+
     pub fn devices_tree(&self) -> &Devices {
         &self.audio.profile.devices
     }
@@ -176,7 +234,8 @@ impl Status {
 
         for (source_id, targets) in &self.audio.profile.routes {
             if targets.iter().any(|target| target.to_string() == target_id) {
-                if let Some(device) = self.get_device(&source_id.to_string(), Some(DeviceType::Source))
+                if let Some(device) =
+                    self.get_device(&source_id.to_string(), Some(DeviceType::Source))
                 {
                     sources.push(device);
                 }
@@ -210,7 +269,8 @@ impl Status {
             .iter()
             .enumerate()
             .map(|(index, descriptor)| {
-                if let Some(device) = Self::match_descriptor_to_hardware_device(descriptor, available)
+                if let Some(device) =
+                    Self::match_descriptor_to_hardware_device(descriptor, available)
                 {
                     let mut converted = Self::convert_hardware_device(device);
                     converted.attachment_index = Some(index);
@@ -230,7 +290,10 @@ impl Status {
     pub(crate) fn rebuild_index(&self) {
         let mut index = HashMap::new();
         for device in self.get_all_devices() {
-            index.insert(device.id.clone(), device);
+            index
+                .entry(device.id.clone())
+                .or_insert_with(Vec::new)
+                .push(device);
         }
         *self.device_index.write() = Some(index);
     }
@@ -288,17 +351,33 @@ impl Status {
 
         let index_guard = self.device_index.read();
         if let Some(ref index) = *index_guard {
-            index.get(device_id).and_then(|d| {
-                if device_type.is_none_or(|t| d.device_type == t) {
-                    Some(d.clone())
-                } else {
-                    None
-                }
+            index.get(device_id).and_then(|devices| {
+                devices
+                    .iter()
+                    .find(|d| device_type.is_none_or(|t| d.device_type == t))
+                    .cloned()
             })
         } else {
             self.get_all_devices()
                 .into_iter()
                 .find(|d| d.id == device_id && device_type.is_none_or(|t| d.device_type == t))
+        }
+    }
+
+    pub fn infer_device_type(&self, device_id: &str, prefer_target: bool) -> Option<DeviceType> {
+        let has_source = self
+            .get_device(device_id, Some(DeviceType::Source))
+            .is_some();
+        let has_target = self
+            .get_device(device_id, Some(DeviceType::Target))
+            .is_some();
+
+        match (has_source, has_target, prefer_target) {
+            (true, false, _) => Some(DeviceType::Source),
+            (false, true, _) => Some(DeviceType::Target),
+            (true, true, true) => Some(DeviceType::Target),
+            (true, true, false) => Some(DeviceType::Source),
+            _ => None,
         }
     }
 
@@ -311,11 +390,23 @@ impl Status {
     }
 
     fn convert_virtual_target(raw: &VirtualTargetDevice) -> Option<Device> {
-        Self::convert_target_common(&raw.description, &raw.volume, &raw.mute_state, false)
+        Self::convert_target_common(
+            &raw.description,
+            &raw.volume,
+            &raw.mute_state,
+            raw.mix,
+            false,
+        )
     }
 
     fn convert_physical_target(raw: &PhysicalTargetDevice) -> Option<Device> {
-        Self::convert_target_common(&raw.description, &raw.volume, &raw.mute_state, true)
+        Self::convert_target_common(
+            &raw.description,
+            &raw.volume,
+            &raw.mute_state,
+            raw.mix,
+            true,
+        )
     }
 
     fn convert_source_common(
@@ -327,19 +418,18 @@ impl Status {
         let id = description.id.to_string();
         let name = description.name.clone();
 
-        let volume_val = volumes
-            .volume
-            .iter()
-            .find(|(k, _)| format!("{:?}", k).contains("A"))
-            .map(|(_, &v)| v)
-            .unwrap_or_else(|| volumes.volume.values().next().copied().unwrap_or(50));
-        let volume = if volume_val > 100 {
-            ((volume_val as u16 * 100) / 255) as u8
-        } else {
-            volume_val
-        };
-
-        let is_muted = mute_states.mute_state.contains(&MuteTarget::TargetA);
+        let mix_a_volume = Self::normalize_volume(volumes.volume[Mix::A]);
+        let mix_b_volume = Self::normalize_volume(volumes.volume[Mix::B]);
+        let mix_a_muted = mute_states.mute_state.contains(&MuteTarget::TargetA);
+        let mix_b_muted = mute_states.mute_state.contains(&MuteTarget::TargetB);
+        let mix_a_target_count = mute_states.mute_targets[MuteTarget::TargetA]
+            .len()
+            .min(u8::MAX as usize) as u8;
+        let mix_b_target_count = mute_states.mute_targets[MuteTarget::TargetB]
+            .len()
+            .min(u8::MAX as usize) as u8;
+        let mix_a_all = mix_a_target_count == 0;
+        let mix_b_all = mix_b_target_count == 0;
 
         let color = Some(DeviceColor {
             red: description.colour.red,
@@ -352,9 +442,19 @@ impl Status {
             name: name.clone(),
             device_type: DeviceType::Source,
             is_physical,
-            volume,
-            is_muted,
+            volume: mix_a_volume,
+            is_muted: mix_a_muted,
             color,
+            source_mix_a_volume: Some(mix_a_volume),
+            source_mix_b_volume: Some(mix_b_volume),
+            source_mix_a_muted: Some(mix_a_muted),
+            source_mix_b_muted: Some(mix_b_muted),
+            source_mute_a_all: Some(mix_a_all),
+            source_mute_b_all: Some(mix_b_all),
+            source_mute_a_target_count: Some(mix_a_target_count),
+            source_mute_b_target_count: Some(mix_b_target_count),
+            source_volumes_linked: Some(volumes.volumes_linked.is_some()),
+            target_mix_b: None,
         })
     }
 
@@ -362,16 +462,12 @@ impl Status {
         description: &pipeweaver_profile::DeviceDescription,
         volume: &u8,
         mute_state: &pipeweaver_shared::MuteState,
+        mix: Mix,
         is_physical: bool,
     ) -> Option<Device> {
         let id = description.id.to_string();
         let name = description.name.clone();
-
-        let volume = if *volume > 100 {
-            ((*volume as u16 * 100) / 255) as u8
-        } else {
-            *volume
-        };
+        let volume = Self::normalize_volume(*volume);
 
         let is_muted = matches!(mute_state, pipeweaver_shared::MuteState::Muted);
 
@@ -389,6 +485,16 @@ impl Status {
             volume,
             is_muted,
             color,
+            source_mix_a_volume: None,
+            source_mix_b_volume: None,
+            source_mix_a_muted: None,
+            source_mix_b_muted: None,
+            source_mute_a_all: None,
+            source_mute_b_all: None,
+            source_mute_a_target_count: None,
+            source_mute_b_target_count: None,
+            source_volumes_linked: None,
+            target_mix_b: Some(matches!(mix, Mix::B)),
         })
     }
 
@@ -406,7 +512,10 @@ impl Status {
         devices: &'a [PipeweaverPhysicalDevice],
     ) -> Option<&'a PipeweaverPhysicalDevice> {
         if let Some(name) = descriptor.name.as_ref() {
-            if let Some(device) = devices.iter().find(|device| device.name.as_ref() == Some(name)) {
+            if let Some(device) = devices
+                .iter()
+                .find(|device| device.name.as_ref() == Some(name))
+            {
                 return Some(device);
             }
         }

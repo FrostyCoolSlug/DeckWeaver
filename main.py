@@ -1,8 +1,8 @@
 """StreamController plugin entry point - thin wrapper over Rust core"""
 
-from io import BytesIO
 import logging
 import os
+import time
 from typing import Any, Optional
 
 from PIL import Image
@@ -18,9 +18,8 @@ import globals as gl
 import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
-gi.require_version("Gdk", "4.0")
 gi.require_version("GdkPixbuf", "2.0")
-from gi.repository import Adw, Gdk, GdkPixbuf, GLib, Gtk
+from gi.repository import Adw, GdkPixbuf, GLib, Gtk
 
 # Configure logging for Rust before importing the module
 # This routes Rust's tracing::info!, warn!, error! to Python's logging
@@ -32,8 +31,14 @@ from .deckweaver import (
     ActionConfig,
     ActionType,
     Device,
-    load_icon_to_png,
+    DeviceType,
 )
+
+PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
+DEFAULT_BUTTON_ICON_PATH = os.path.join(
+    PLUGIN_DIR, "assets", "icons", "audio-lines.svg"
+)
+LANGUAGE_CODES = ("auto", "en_US", "es_ES", "zh_CN", "fr_FR", "de_DE")
 
 # Single shared core instance
 _core: Optional[DeckWeaverCore] = None
@@ -109,26 +114,7 @@ class DeckWeaver(PluginBase):
         settings = self.get_settings()
         language = settings.get("language", "auto")
         if language != "auto":
-            self._set_language(language)
-        else:
-            self.lm.set_to_os_default()
-
-    def _set_language(self, language: str):
-        """Set the language for the locale manager"""
-        if hasattr(self.lm, "set_language"):
-            try:
-                self.lm.set_language(language)
-                return
-            except (AttributeError, TypeError):
-                pass
-        if hasattr(self.lm, "set_locale"):
-            try:
-                self.lm.set_locale(language)
-                return
-            except (AttributeError, TypeError):
-                pass
-        if hasattr(self.lm, "language"):
-            self.lm.language = language
+            self.lm.set_language(language)
         else:
             self.lm.set_to_os_default()
 
@@ -201,11 +187,8 @@ class DeckWeaver(PluginBase):
 
     def get_settings_area(self) -> Adw.PreferencesGroup:
         languages = [
-            ("auto", self.lm.get("settings.language.name.auto")),
-            ("en_US", self.lm.get("settings.language.name.en_US")),
-            ("es_ES", self.lm.get("settings.language.name.es_ES")),
-            ("fr_FR", self.lm.get("settings.language.name.fr_FR")),
-            ("de_DE", self.lm.get("settings.language.name.de_DE")),
+            (code, self.lm.get(f"settings.language.name.{code}"))
+            for code in LANGUAGE_CODES
         ]
 
         self.language_model = Gtk.StringList.new([name for _, name in languages])
@@ -234,9 +217,8 @@ class DeckWeaver(PluginBase):
 
     def _on_language_changed(self, combo: Adw.ComboRow, _):
         idx = combo.get_selected()
-        languages = ["auto", "en_US", "es_ES", "fr_FR", "de_DE"]
-        if idx < len(languages):
-            code = languages[idx]
+        if idx < len(LANGUAGE_CODES):
+            code = LANGUAGE_CODES[idx]
             settings = self.get_settings()
             settings["language"] = code
             self.set_settings(settings)
@@ -250,10 +232,15 @@ class BaseAction(ActionBase):
     """Base action with shared Rust core functionality"""
 
     ACTION_TYPE = ActionType.knob()  # Override in subclasses
+    KNOB_DESIGN_WIDTH = 200.0
+    KNOB_DESIGN_HEIGHT = 100.0
     MIN_VOLUME_STEP = 1
     MAX_VOLUME_STEP = 20
     DEFAULT_VOLUME_STEP = 5
     COLOR_METER = (0, 0, 0, 255)
+    VOLUME_STEP_RANGE = (MIN_VOLUME_STEP, MAX_VOLUME_STEP)
+    VOLUME_STEP_SUBTITLE: Optional[str] = None
+    SHOW_METERS_ROW = False
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -268,7 +255,34 @@ class BaseAction(ActionBase):
         self._meter_color: Optional[tuple[int, int, int, int]] = None
         self._volume_bar_color: Optional[tuple[int, int, int, int]] = None
         self._icon_path: Optional[str] = None
-        self._devices: list = []
+        self._device_type: Optional[DeviceType] = None
+        self._source_mix = "A"
+        self._show_action_page = False
+        self._source_mute_overrides: dict[bool, bool] = {}
+        self.device_expander: Optional[Adw.ExpanderRow] = None
+        self.icon_row: Optional[Adw.ActionRow] = None
+        self.icon_preview: Optional[Gtk.Image] = None
+        self.output_expander: Optional[Adw.ExpanderRow] = None
+        self.source_expander: Optional[Adw.ExpanderRow] = None
+
+    def _persist_settings(self, **updates):
+        settings = self.get_settings()
+        for key, value in updates.items():
+            if value is None:
+                settings.pop(key, None)
+            else:
+                settings[key] = value
+        self.set_settings(settings)
+        return settings
+
+    def _uses_signed_volume_step(self) -> bool:
+        return self.VOLUME_STEP_RANGE[0] < 0
+
+    def _normalize_volume_step(self, value: int) -> int:
+        if not self._uses_signed_volume_step():
+            value = abs(value)
+        min_step, max_step = self.VOLUME_STEP_RANGE
+        return max(min_step, min(max_step, value))
 
     def _get_button_size(self) -> int:
         try:
@@ -278,10 +292,23 @@ class BaseAction(ActionBase):
         except Exception:
             return 72
 
+    def _get_knob_size(self) -> tuple[int, int]:
+        try:
+            inp = self.get_input()
+            size = inp.get_image_size()
+            if isinstance(size, (list, tuple)) and len(size) >= 2:
+                width = int(size[0])
+                height = int(size[1])
+                if width > 0 and height > 0:
+                    return width, height
+        except Exception:
+            pass
+        return int(self.KNOB_DESIGN_WIDTH), int(self.KNOB_DESIGN_HEIGHT)
+
     def _get_dimensions(self) -> tuple[int, int]:
         """Get width, height for this action type"""
         if self.ACTION_TYPE == ActionType.knob():
-            return 200, 100
+            return self._get_knob_size()
         else:
             size = self._get_button_size()
             return size, size
@@ -295,22 +322,17 @@ class BaseAction(ActionBase):
             return (int(color[0]), int(color[1]), int(color[2]), int(color[3]))
         return default
 
-    def _load_icon_as_png(self, path: str) -> Optional[bytes]:
-        """Load an icon file and convert to PNG bytes (delegates to Rust)"""
-        if not path or not os.path.exists(path):
-            return None
-        
-        try:
-            return load_icon_to_png(path)
-        except Exception as e:
-            log.error(f"Error loading icon from {path}: {e}")
-            return None
+    def _resolved_icon_path(self) -> Optional[str]:
+        if self._icon_path and os.path.exists(self._icon_path):
+            return self._icon_path
+        return None
 
     def _build_config(self) -> ActionConfig:
         """Build ActionConfig from current settings"""
         w, h = self._get_dimensions()
         config = ActionConfig(self._action_id, self.ACTION_TYPE, w, h)
         config.device_id = self._device_id
+        config.device_type = self._device_type
         config.volume_step = self._volume_step
         config.meters_enabled = self._meters_enabled
         config.meter_invert = self._meter_invert_color
@@ -319,34 +341,41 @@ class BaseAction(ActionBase):
             config.volume_bar_color = self._volume_bar_color
         if self._meter_color:
             config.meter_color = self._meter_color
-        
-        # Load custom icon if set (convert to PNG if needed)
-        if self._icon_path and os.path.exists(self._icon_path):
-            try:
-                icon_data = self._load_icon_as_png(self._icon_path)
-                if icon_data:
-                    config.icon_png = icon_data
-            except Exception as e:
-                log.error(f"Error loading icon: {e}")
+        if self.ACTION_TYPE == ActionType.knob():
+            config.source_mix_b = self._source_mix == "B"
+            config.show_action_page = self._show_action_page
+        config.icon_path = self._resolved_icon_path()
 
         return config
 
     def _load_settings(self):
         settings = self.get_settings()
         self._device_id = settings.get("device_id")
-        self._volume_step = settings.get("volume_step", self.DEFAULT_VOLUME_STEP)
+        self._device_type = self._parse_device_type(settings.get("device_type"))
+        volume_step = int(settings.get("volume_step", self.DEFAULT_VOLUME_STEP))
+        self._volume_step = self._normalize_volume_step(volume_step)
         self._meters_enabled = settings.get("meters_enabled", True)
         self._meter_invert_color = settings.get("meter_invert_color", True)
         self._meter_color = self._load_color_tuple(settings, "meter_color", self.COLOR_METER)
         self._volume_bar_color = self._load_color_tuple(settings, "volume_bar_color")
         self._icon_path = settings.get("icon_path_from_picker")
+        self._source_mix = "B" if settings.get("source_mix") == "B" else "A"
+        self._show_action_page = False
+        if self._device_id and self._device_type is None:
+            inferred_type = self._infer_device_type(self._device_id)
+            if inferred_type is not None:
+                self._device_type = inferred_type
+                device_type = self._device_type_setting_value(inferred_type)
+                if device_type is not None:
+                    settings["device_type"] = device_type
+                    self.set_settings(settings)
         
         # Try to get device name from core if we have device_id
         if self._device_id and not self._device_name:
             self._device_name = self._core.get_action_device_name(self._action_id)
             if not self._device_name:
                 # Fallback: look through devices list
-                device = self._core.get_device(self._device_id)
+                device = self._get_selected_device()
                 if device:
                     self._device_name = device.name
 
@@ -374,12 +403,9 @@ class BaseAction(ActionBase):
         """Called when a new image is ready for this action (from polling)"""
         def update():
             try:
-                if width is not None and height is not None:
-                    # Raw RGBA bytes - much faster than PNG decode!
-                    image = Image.frombytes("RGBA", (width, height), rgba_bytes, "raw", "RGBA", 0, 1)
-                else:
-                    # Fallback: try to decode as PNG (shouldn't happen)
-                    image = Image.open(BytesIO(rgba_bytes))
+                if width is None or height is None:
+                    return
+                image = Image.frombytes("RGBA", (width, height), rgba_bytes, "raw", "RGBA", 0, 1)
                 self.set_media(image=image, update=True)
             except Exception as e:
                 log.error(f"Error setting image: {e}")
@@ -394,20 +420,135 @@ class BaseAction(ActionBase):
 
     def _set_label(self, text: str):
         """Set the label below the dial (top label for Stream Deck+)"""
-        if hasattr(self, 'set_top_label'):
-            self.set_top_label(text, font_size=14)
+        self.set_top_label(text, font_size=14)
 
-    def _create_rgba_from_color(self, color: Optional[tuple] = None) -> Gdk.RGBA:
-        """Create Gdk.RGBA from tuple color"""
-        rgba = Gdk.RGBA()
-        if color and len(color) >= 3:
-            rgba.red = color[0] / 255.0
-            rgba.green = color[1] / 255.0
-            rgba.blue = color[2] / 255.0
-            rgba.alpha = color[3] / 255.0 if len(color) > 3 else 1.0
-        else:
-            rgba.red = rgba.green = rgba.blue = rgba.alpha = 1.0
-        return rgba
+    def _get_selected_source_mix_is_b(self) -> bool:
+        return self._source_mix == "B"
+
+    def _parse_device_type(self, value: Any) -> Optional[DeviceType]:
+        if value == "source":
+            return DeviceType.source()
+        if value == "target":
+            return DeviceType.target()
+        return None
+
+    def _device_type_setting_value(self, device_type: Optional[DeviceType]) -> Optional[str]:
+        if device_type is None:
+            return None
+        if device_type.is_source():
+            return "source"
+        if device_type.is_target():
+            return "target"
+        return None
+
+    def _infer_device_type(self, device_id: str) -> Optional[DeviceType]:
+        return self._core.infer_device_type(
+            device_id, isinstance(self, SourceSwitchButtonAction)
+        )
+
+    def _set_selected_source_mix(self, mix: str):
+        mix = "B" if mix == "B" else "A"
+        self._source_mix = mix
+        self._persist_settings(source_mix=mix)
+
+    def _set_selected_device(self, device: Device):
+        self._device_id = device.id
+        self._device_name = device.name
+        self._device_type = device.device_type
+        self._source_mute_overrides.clear()
+        self._persist_settings(
+            device_id=device.id,
+            device_name=device.name,
+            device_type=self._device_type_setting_value(device.device_type),
+        )
+
+    def _get_selected_device(self) -> Optional[Device]:
+        if not self._device_id:
+            return None
+        if self._device_type is None:
+            self._device_type = self._infer_device_type(self._device_id)
+        device = self._core.get_device(self._device_id, self._device_type)
+        if device:
+            self._sync_source_mute_overrides(device)
+        return device
+
+    def _is_selected_source_device(self) -> bool:
+        if self._device_type is not None:
+            return self._device_type.is_source()
+        device = self._get_selected_device()
+        return bool(device and device.device_type.is_source())
+
+    def _get_touch_slot_bounds(self) -> Optional[tuple[int, int, int, int]]:
+        try:
+            inp = self.get_input()
+            touch = inp.get_touch_screen()
+            x1, _y1, x2, y2 = touch.get_dial_image_area(self.input_ident)
+            if x2 > x1 and y2 > 0:
+                return int(x1), int(x2), int(x2 - x1), int(y2)
+        except Exception:
+            pass
+
+        try:
+            screen_width, screen_height = self.deck_controller.get_touchscreen_image_size()
+        except Exception:
+            screen_width, screen_height = 800, 100
+
+        try:
+            dial_count = len(self.deck_controller.inputs.get(Input.Dial, [])) or 1
+        except Exception:
+            dial_count = 4
+
+        dial_index = getattr(self.input_ident, "index", 0)
+        start_x = int((dial_index / dial_count) * screen_width)
+        end_x = int(((dial_index + 1) / dial_count) * screen_width)
+        segment_width = max(1, end_x - start_x)
+        return start_x, end_x, segment_width, int(screen_height)
+
+    def _set_action_page_visible(self, visible: bool):
+        self._show_action_page = visible
+        self._update_config()
+
+    def _source_device_muted(self, device: Optional[Device], mix_b: bool) -> bool:
+        if not device:
+            return False
+        muted = device.source_mix_b_muted if mix_b else device.source_mix_a_muted
+        return bool(muted)
+
+    def _sync_source_mute_overrides(self, device: Device):
+        for mix_b in (False, True):
+            if mix_b not in self._source_mute_overrides:
+                continue
+            if self._source_mute_overrides[mix_b] == self._source_device_muted(device, mix_b):
+                self._source_mute_overrides.pop(mix_b, None)
+
+    def _set_source_mute_state(self, mix_b: bool, muted: bool):
+        if not self._device_id:
+            return
+        self._source_mute_overrides[mix_b] = muted
+        self._core.set_source_mute(self._device_id, mix_b, muted)
+
+    def _effective_source_mute_state(self, mix_b: bool) -> bool:
+        if mix_b in self._source_mute_overrides:
+            return self._source_mute_overrides[mix_b]
+        device = self._get_selected_device()
+        return self._source_device_muted(device, mix_b)
+
+    def _toggle_source_mute_preset(self, mix_b: bool):
+        if not self._device_id:
+            return
+        self._set_source_mute_state(mix_b, not self._effective_source_mute_state(mix_b))
+
+    def _toggle_source_link(self):
+        if not self._device_id:
+            return
+        self._core.toggle_source_volumes_linked(self._device_id)
+
+    def _clear_box_children(self, container: Gtk.Box):
+        child = container.get_first_child()
+        while child:
+            next_child = child.get_next_sibling()
+            container.remove(child)
+            child = next_child
 
     def _icon_row_default_subtitle(self) -> str:
         return "Select an icon from StreamController's icon packs"
@@ -466,7 +607,9 @@ class BaseAction(ActionBase):
         """Return configuration UI rows - matching original GitHub style"""
         lm = self.plugin_base.lm
         self._load_settings()
-        self._devices = self._core.get_devices()
+        self.device_expander = None
+        self.icon_row = None
+        self.icon_preview = None
 
         if not self._core.is_available():
             error_row = Adw.ActionRow()
@@ -505,42 +648,14 @@ class BaseAction(ActionBase):
         # Custom Icon Row
         icon_row = self._build_icon_row()
 
-        # Volume Step Row
-        # For ButtonAction and SliderAction, use signed range (-20 to 20)
-        # For KnobAction, use positive range (5 to 20)
-        class_name = self.__class__.__name__
-        if class_name == "ButtonAction" or class_name == "SliderAction":
-            self.volume_step_row = Adw.SpinRow.new_with_range(-20, 20, 1)
-            self.volume_step_row.set_value(self._volume_step)
-            if class_name == "ButtonAction":
-                self.volume_step_row.set_subtitle("Positive = vol up, Negative = vol down, Zero = mute toggle")
-            else:
-                self.volume_step_row.set_subtitle("Positive = top slider, Negative = bottom")
-        else:
-            # KnobAction
-            self.volume_step_row = Adw.SpinRow.new_with_range(5, self.MAX_VOLUME_STEP, 1)
-            self.volume_step_row.set_value(abs(self._volume_step))
-            self.volume_step_row.set_subtitle(lm.get("ui.volume_step.subtitle"))
+        min_step, max_step = self.VOLUME_STEP_RANGE
+        self.volume_step_row = Adw.SpinRow.new_with_range(min_step, max_step, 1)
+        self.volume_step_row.set_value(self._volume_step)
+        self.volume_step_row.set_subtitle(
+            self.VOLUME_STEP_SUBTITLE or lm.get("ui.volume_step.subtitle")
+        )
         self.volume_step_row.set_title(lm.get("ui.volume_step.title"))
         self.volume_step_row.connect("notify::value", self._on_volume_step_changed)
-
-        # Volume Bar Color Row
-        volume_bar_color_row = Adw.ActionRow()
-        volume_bar_color_row.set_title("Volume Bar Color")
-        volume_bar_color_row.set_subtitle("Override the volume bar color")
-        
-        volume_bar_color_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        self.volume_bar_color_button = Gtk.ColorButton(valign=Gtk.Align.CENTER)
-        self.volume_bar_color_button.set_rgba(self._create_rgba_from_color(self._volume_bar_color))
-        self.volume_bar_color_button.connect("color-set", self._on_volume_bar_color_changed)
-        volume_bar_color_box.append(self.volume_bar_color_button)
-        
-        clear_volume_bar_color_button = Gtk.Button(icon_name="edit-clear-symbolic", valign=Gtk.Align.CENTER)
-        clear_volume_bar_color_button.set_tooltip_text("Clear override")
-        clear_volume_bar_color_button.connect("clicked", self._on_clear_volume_bar_color_clicked)
-        volume_bar_color_box.append(clear_volume_bar_color_button)
-        
-        volume_bar_color_row.add_suffix(volume_bar_color_box)
 
         # Meters Enabled Row
         meters_enabled_row = Adw.ActionRow()
@@ -551,63 +666,25 @@ class BaseAction(ActionBase):
         self.meters_enabled_switch.set_active(self._meters_enabled)
         self.meters_enabled_switch.connect("notify::active", self._on_meters_enabled_changed)
         meters_enabled_row.add_suffix(self.meters_enabled_switch)
-
-        # Meter Color Row (with invert switch and color button)
-        meter_color_row = Adw.ActionRow()
-        meter_color_row.set_title("Meter Color")
-        meter_color_row.set_subtitle("Invert volume color or use custom color")
-        
-        meter_color_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        
-        self.meter_invert_switch = Gtk.Switch(valign=Gtk.Align.CENTER)
-        self.meter_invert_switch.set_active(self._meter_invert_color)
-        self.meter_invert_switch.connect("notify::active", self._on_meter_invert_changed)
-        meter_color_box.append(self.meter_invert_switch)
-        
-        self.meter_color_button = Gtk.ColorButton(valign=Gtk.Align.CENTER)
-        self.meter_color_button.set_rgba(self._create_rgba_from_color(self._meter_color or self.COLOR_METER))
-        self.meter_color_button.connect("color-set", self._on_meter_color_changed)
-        meter_color_box.append(self.meter_color_button)
-        
-        self.clear_meter_color_button = Gtk.Button(icon_name="edit-clear-symbolic", valign=Gtk.Align.CENTER)
-        self.clear_meter_color_button.set_tooltip_text("Reset to default")
-        self.clear_meter_color_button.connect("clicked", self._on_clear_meter_color_clicked)
-        meter_color_box.append(self.clear_meter_color_button)
-        
-        meter_color_row.add_suffix(meter_color_box)
-
-        # Set initial sensitivity after UI is created
-        self._update_meter_color_sensitivity()
         
         rows = [
             self.device_expander,
-            icon_row,
             self.volume_step_row,
         ]
-        
-        # Only add meter and volume bar settings for KnobAction and SliderAction (not ButtonAction)
-        class_name = self.__class__.__name__
-        if class_name != "ButtonAction":
-            rows.extend([
-                volume_bar_color_row,
-                meters_enabled_row,
-                meter_color_row,
-            ])
-        
+        if icon_row is not None:
+            rows.insert(1, icon_row)
+
+        if self.SHOW_METERS_ROW:
+            rows.append(meters_enabled_row)
+
         return rows
 
     def _populate_device_list(self, retry_count: int = 0):
         """Populate the device list in the expander"""
-        # Clear existing children
-        child = self.device_container.get_first_child()
-        while child:
-            next_child = child.get_next_sibling()
-            self.device_container.remove(child)
-            child = next_child
-        
-        self._devices = self._core.get_devices()
-        
-        if not self._devices:
+        self._clear_box_children(self.device_container)
+        devices = self._core.get_devices()
+
+        if not devices:
             # Retry a few times if devices not loaded yet
             if retry_count < 5:
                 loading_row = Adw.ActionRow()
@@ -626,10 +703,10 @@ class BaseAction(ActionBase):
         
         # Update device name if we have a selected device
         if self._device_id and not self._device_name:
-            for d in self._devices:
+            for d in devices:
                 if d.id == self._device_id:
                     self._device_name = d.name
-                    if hasattr(self, 'device_expander'):
+                    if self.device_expander is not None:
                         self.device_expander.set_subtitle(d.name)
                     break
         
@@ -637,13 +714,13 @@ class BaseAction(ActionBase):
         sources = self._core.get_sources()
         targets = self._core.get_targets()
         
-        for section_title, devices in [("Sources", sources), ("Targets", targets)]:
-            if not devices:
+        for device_group in (sources, targets):
+            if not device_group:
                 continue
             group = Adw.PreferencesGroup()
             group.set_margin_top(12)
             group.set_margin_bottom(6)
-            for device in devices:
+            for device in device_group:
                 row = self._create_device_row(device)
                 group.add(row)
                 if device.id == self._device_id:
@@ -679,14 +756,9 @@ class BaseAction(ActionBase):
         """Handle device row activation"""
         device = row.device_data
         if device:
-            self._device_id = device.id
-            self._device_name = device.name
+            self._set_selected_device(device)
             
-            settings = self.get_settings()
-            settings["device_id"] = device.id
-            self.set_settings(settings)
-            
-            if hasattr(self, 'device_expander'):
+            if self.device_expander is not None:
                 self.device_expander.set_subtitle(device.name)
             
             self._update_config()
@@ -720,18 +792,16 @@ class BaseAction(ActionBase):
             return
         
         self._icon_path = icon_path
-        settings = self.get_settings()
-        settings["icon_path_from_picker"] = icon_path
-        self.set_settings(settings)
+        self._persist_settings(icon_path_from_picker=icon_path)
         
-        if hasattr(self, 'icon_preview') and os.path.exists(icon_path):
+        if self.icon_preview is not None and os.path.exists(icon_path):
             try:
                 pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(
                     icon_path, width=20, height=20, preserve_aspect_ratio=True
                 )
                 self.icon_preview.set_from_pixbuf(pixbuf)
                 self.icon_preview.set_visible(True)
-                if hasattr(self, 'icon_row'):
+                if self.icon_row is not None:
                     icon_name = os.path.splitext(os.path.basename(icon_path))[0]
                     self.icon_row.set_subtitle(f"Selected: {icon_name}")
             except Exception:
@@ -742,101 +812,24 @@ class BaseAction(ActionBase):
     def _on_remove_icon_clicked(self, button: Gtk.Button):
         """Remove custom icon"""
         self._icon_path = None
-        settings = self.get_settings()
-        settings.pop("icon_path_from_picker", None)
-        self.set_settings(settings)
+        self._persist_settings(icon_path_from_picker=None)
         
-        if hasattr(self, 'icon_preview'):
+        if self.icon_preview is not None:
             self.icon_preview.set_visible(False)
-        if hasattr(self, 'icon_row'):
+        if self.icon_row is not None:
             self.icon_row.set_subtitle(self._icon_row_default_subtitle())
         
         self._update_config()
 
     def _on_volume_step_changed(self, spin_row: Adw.SpinRow, _):
         value = int(spin_row.get_value())
-        # For ButtonAction and SliderAction, use signed value directly (preserve negative)
-        # For KnobAction, always use positive (absolute value)
-        class_name = self.__class__.__name__
-        if class_name == "ButtonAction" or class_name == "SliderAction":
-            self._volume_step = value
-        else:
-            # KnobAction: always positive
-            self._volume_step = abs(value)
-        
-        settings = self.get_settings()
-        settings["volume_step"] = self._volume_step
-        self.set_settings(settings)
+        self._volume_step = self._normalize_volume_step(value)
+        self._persist_settings(volume_step=self._volume_step)
         self._update_config()
-
-    def _update_meter_color_sensitivity(self):
-        """Update sensitivity of meter color controls"""
-        color_enabled = self._meters_enabled and not self._meter_invert_color
-        if hasattr(self, 'meter_color_button'):
-            self.meter_color_button.set_sensitive(color_enabled)
-        if hasattr(self, 'clear_meter_color_button'):
-            self.clear_meter_color_button.set_sensitive(color_enabled)
-        if hasattr(self, 'meter_invert_switch'):
-            self.meter_invert_switch.set_sensitive(self._meters_enabled)
 
     def _on_meters_enabled_changed(self, switch: Gtk.Switch, _):
         self._meters_enabled = switch.get_active()
-        settings = self.get_settings()
-        settings["meters_enabled"] = self._meters_enabled
-        self.set_settings(settings)
-        self._update_meter_color_sensitivity()
-        self._update_config()
-
-    def _on_meter_invert_changed(self, switch: Gtk.Switch, _):
-        self._meter_invert_color = switch.get_active()
-        settings = self.get_settings()
-        settings["meter_invert_color"] = self._meter_invert_color
-        self.set_settings(settings)
-        self._update_meter_color_sensitivity()
-        self._update_config()
-
-    def _on_meter_color_changed(self, button: Gtk.ColorButton):
-        rgba = button.get_rgba()
-        self._meter_color = (
-            int(rgba.red * 255),
-            int(rgba.green * 255),
-            int(rgba.blue * 255),
-            int(rgba.alpha * 255)
-        )
-        settings = self.get_settings()
-        settings["meter_color"] = list(self._meter_color)
-        self.set_settings(settings)
-        self._update_config()
-
-    def _on_clear_meter_color_clicked(self, button: Gtk.Button):
-        self._meter_color = self.COLOR_METER
-        settings = self.get_settings()
-        settings["meter_color"] = list(self._meter_color)
-        self.set_settings(settings)
-        if hasattr(self, 'meter_color_button'):
-            self.meter_color_button.set_rgba(self._create_rgba_from_color(self.COLOR_METER))
-        self._update_config()
-
-    def _on_volume_bar_color_changed(self, button: Gtk.ColorButton):
-        rgba = button.get_rgba()
-        self._volume_bar_color = (
-            int(rgba.red * 255),
-            int(rgba.green * 255),
-            int(rgba.blue * 255),
-            int(rgba.alpha * 255)
-        )
-        settings = self.get_settings()
-        settings["volume_bar_color"] = list(self._volume_bar_color)
-        self.set_settings(settings)
-        self._update_config()
-
-    def _on_clear_volume_bar_color_clicked(self, button: Gtk.Button):
-        self._volume_bar_color = None
-        settings = self.get_settings()
-        settings.pop("volume_bar_color", None)
-        self.set_settings(settings)
-        if hasattr(self, 'volume_bar_color_button'):
-            self.volume_bar_color_button.set_rgba(self._create_rgba_from_color(None))
+        self._persist_settings(meters_enabled=self._meters_enabled)
         self._update_config()
 
     def on_enable(self):
@@ -853,53 +846,205 @@ class KnobAction(BaseAction):
     """Knob/dial action for volume control"""
 
     ACTION_TYPE = ActionType.knob()
+    DOUBLE_TAP_WINDOW_MS = 275
+    SHOW_METERS_ROW = True
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._pending_touch_tap_count = 0
+        self._pending_touch_timeout_id: Optional[int] = None
+        self._last_touch_tap_ts = 0.0
+
+    def _set_knob_volume_relative(self, delta: int):
+        if not self._device_id:
+            return
+        if self._is_selected_source_device():
+            self._core.set_source_volume_relative(
+                self._device_id,
+                self._get_selected_source_mix_is_b(),
+                delta,
+            )
+        else:
+            self._core.set_volume_relative(self._device_id, delta, self._device_type)
+
+    def _set_knob_mix(self, mix_b: bool):
+        if not self._device_id:
+            return
+        if self._is_selected_source_device():
+            self._set_selected_source_mix("B" if mix_b else "A")
+        else:
+            self._core.set_target_mix(self._device_id, mix_b)
+
+    def _toggle_knob_mix(self):
+        if not self._device_id:
+            return
+        if self._is_selected_source_device():
+            self._set_selected_source_mix(
+                "A" if self._get_selected_source_mix_is_b() else "B"
+            )
+            return
+
+        self._core.toggle_target_mix(self._device_id)
+
+    def _cancel_pending_touch_tap(self):
+        if self._pending_touch_timeout_id is not None:
+            GLib.source_remove(self._pending_touch_timeout_id)
+            self._pending_touch_timeout_id = None
+        self._pending_touch_tap_count = 0
+        self._last_touch_tap_ts = 0.0
+
+    def _handle_touchscreen_single_tap(self):
+        if self._is_selected_source_device():
+            self._toggle_source_mute_preset(False)
+            return
+
+        if self._device_id:
+            self._core.toggle_target_mute(self._device_id)
+
+    def _handle_touchscreen_double_tap(self):
+        if self._is_selected_source_device():
+            self._toggle_source_mute_preset(True)
+            return
+
+        self._toggle_knob_mix()
+
+    def _flush_pending_touch_tap(self) -> bool:
+        tap_count = self._pending_touch_tap_count
+        self._pending_touch_timeout_id = None
+        self._pending_touch_tap_count = 0
+        self._last_touch_tap_ts = 0.0
+
+        if tap_count >= 2:
+            self._handle_touchscreen_double_tap()
+        elif tap_count == 1:
+            self._handle_touchscreen_single_tap()
+
+        self._update_config()
+        return False
+
+    def _handle_touchscreen_short_press(self, data: Any):
+        if self._show_action_page:
+            self._cancel_pending_touch_tap()
+            self._handle_action_page_touch(data)
+            return
+
+        now = time.monotonic()
+        within_window = (
+            self._pending_touch_timeout_id is not None
+            and (now - self._last_touch_tap_ts) * 1000.0 <= self.DOUBLE_TAP_WINDOW_MS
+        )
+
+        if within_window:
+            self._pending_touch_tap_count += 1
+            if self._pending_touch_timeout_id is not None:
+                GLib.source_remove(self._pending_touch_timeout_id)
+                self._pending_touch_timeout_id = None
+            self._flush_pending_touch_tap()
+            return
+
+        self._cancel_pending_touch_tap()
+        self._pending_touch_tap_count = 1
+        self._last_touch_tap_ts = now
+        self._pending_touch_timeout_id = GLib.timeout_add(
+            self.DOUBLE_TAP_WINDOW_MS,
+            self._flush_pending_touch_tap,
+        )
+
+    def _handle_action_page_touch(self, data: Any):
+        if not isinstance(data, dict) or not self._device_id:
+            return
+        device = self._get_selected_device()
+        if not device:
+            return
+
+        slot = self._get_touch_slot_bounds()
+        if slot is None:
+            return
+        start_x, _end_x, slot_width, slot_height = slot
+
+        raw_x = max(0.0, min(float(slot_width), float(data.get("x", 0.0)) - float(start_x)))
+        raw_y = max(0.0, min(float(slot_height), float(data.get("y", 0.0))))
+
+        handled = False
+        if device.device_type.is_source():
+            col = min(2, max(0, int((raw_x * 3.0) / max(1.0, float(slot_width)))))
+            row = min(1, max(0, int((raw_y * 2.0) / max(1.0, float(slot_height)))))
+            if row == 0 and col == 0:
+                self._set_knob_mix(False)
+                handled = True
+            elif row == 0 and col == 1:
+                self._set_knob_mix(True)
+                handled = True
+            elif row == 0 and col == 2:
+                self._toggle_source_link()
+                handled = True
+            elif row == 1 and col == 0:
+                self._toggle_source_mute_preset(False)
+                handled = True
+            elif row == 1 and col == 1:
+                self._toggle_source_mute_preset(True)
+                handled = True
+        else:
+            col = min(2, max(0, int((raw_x * 3.0) / max(1.0, float(slot_width)))))
+            if col == 0:
+                self._core.toggle_target_mute(self._device_id)
+                handled = True
+            elif col == 1:
+                self._set_knob_mix(False)
+                handled = True
+            elif col == 2:
+                self._set_knob_mix(True)
+                handled = True
+
+        if handled:
+            self._update_config()
+        else:
+            self._set_action_page_visible(False)
 
     def event_callback(self, event: Any, data: Any):
         if not self._device_id:
             return
+
         if event == Input.Dial.Events.TURN_CW:
-            self._core.set_volume_relative(self._device_id, self._volume_step)
+            self._set_knob_volume_relative(self._volume_step)
         elif event == Input.Dial.Events.TURN_CCW:
-            self._core.set_volume_relative(self._device_id, -self._volume_step)
-        elif event == Input.Dial.Events.SHORT_TOUCH_PRESS or "Short Up" in str(event):
-            self._core.toggle_mute(self._device_id)
+            self._set_knob_volume_relative(-self._volume_step)
+        elif event == Input.Dial.Events.SHORT_UP:
+            self._toggle_knob_mix()
+            self._show_action_page = False
+            self._update_config()
+        elif event == Input.Dial.Events.SHORT_TOUCH_PRESS:
+            self._handle_touchscreen_short_press(data)
+        elif event == Input.Dial.Events.LONG_TOUCH_PRESS:
+            self._cancel_pending_touch_tap()
+            self._set_action_page_visible(True)
 
 
 class ButtonAction(BaseAction):
     """Volume button (positive step = up, negative step = down, zero = mute)"""
 
     ACTION_TYPE = ActionType.button()
+    VOLUME_STEP_RANGE = (-20, 20)
+    VOLUME_STEP_SUBTITLE = "Positive = vol up, Negative = vol down, Zero = mute toggle"
 
     def get_config_rows(self):
         # Base class already excludes meter settings for ButtonAction
         return super().get_config_rows()
 
-    def _build_config(self) -> ActionConfig:
-        config = super()._build_config()
-        
-        # If no custom icon is set, use the default audio-lines.svg icon
-        if not config.icon_png:
-            # Get the plugin directory (where main.py is located)
-            plugin_dir = os.path.dirname(os.path.abspath(__file__))
-            default_icon_path = os.path.join(plugin_dir, "assets", "icons", "audio-lines.svg")
-            
-            if os.path.exists(default_icon_path):
-                try:
-                    icon_data = self._load_icon_as_png(default_icon_path)
-                    if icon_data:
-                        config.icon_png = icon_data
-                except Exception as e:
-                    log.error(f"Error loading default icon: {e}")
-        
-        return config
+    def _resolved_icon_path(self) -> Optional[str]:
+        return super()._resolved_icon_path() or (
+            DEFAULT_BUTTON_ICON_PATH if os.path.exists(DEFAULT_BUTTON_ICON_PATH) else None
+        )
 
     def event_callback(self, event: Any, data: Any):
-        if "Short Up" in str(event) and self._device_id:
+        if event == Input.Key.Events.SHORT_UP and self._device_id:
             if self._volume_step == 0:
                 # Mute button
-                self._core.toggle_mute(self._device_id)
+                self._core.toggle_mute(self._device_id, self._device_type)
             else:
-                self._core.set_volume_relative(self._device_id, self._volume_step)
+                self._core.set_volume_relative(
+                    self._device_id, self._volume_step, self._device_type
+                )
 
 
 class SourceSwitchButtonAction(ButtonAction):
@@ -928,6 +1073,8 @@ class SourceSwitchButtonAction(ButtonAction):
     def get_config_rows(self):
         lm = self.plugin_base.lm
         self._load_settings()
+        self.output_expander = None
+        self.source_expander = None
 
         if not self._core.is_available():
             error_row = Adw.ActionRow()
@@ -1021,15 +1168,8 @@ class SourceSwitchButtonAction(ButtonAction):
         config.button_overlay = False
         return config
 
-    def _clear_selector_container(self, container: Gtk.Box):
-        child = container.get_first_child()
-        while child:
-            next_child = child.get_next_sibling()
-            container.remove(child)
-            child = next_child
-
     def _populate_output_device_list(self):
-        self._clear_selector_container(self.output_device_container)
+        self._clear_box_children(self.output_device_container)
         targets = [device for device in self._core.get_targets() if device.is_physical]
 
         if not targets:
@@ -1055,7 +1195,7 @@ class SourceSwitchButtonAction(ButtonAction):
         self.output_device_container.append(group)
 
     def _populate_source_device_list(self):
-        self._clear_selector_container(self.source_device_container)
+        self._clear_box_children(self.source_device_container)
         sources = self._core.get_output_hardware_devices()
 
         if not sources:
@@ -1090,14 +1230,9 @@ class SourceSwitchButtonAction(ButtonAction):
         if not device:
             return
 
-        self._device_id = device.id
-        self._device_name = device.name
-        settings = self.get_settings()
-        settings["device_id"] = device.id
-        settings["device_name"] = device.name
-        self.set_settings(settings)
+        self._set_selected_device(device)
 
-        if hasattr(self, "output_expander"):
+        if self.output_expander is not None:
             self.output_expander.set_subtitle(device.name)
 
         self._update_config()
@@ -1111,12 +1246,12 @@ class SourceSwitchButtonAction(ButtonAction):
         self._hardware_device_name = device.name or device.description or (
             str(device.node_id) if device.node_id is not None else None
         )
-        settings = self.get_settings()
-        settings["hardware_device_node_id"] = self._hardware_device_node_id
-        settings["hardware_device_name"] = self._hardware_device_name
-        self.set_settings(settings)
+        self._persist_settings(
+            hardware_device_node_id=self._hardware_device_node_id,
+            hardware_device_name=self._hardware_device_name,
+        )
 
-        if hasattr(self, "source_expander"):
+        if self.source_expander is not None:
             self.source_expander.set_subtitle(
                 self._hardware_device_name
                 or self.plugin_base.lm.get(
@@ -1139,7 +1274,7 @@ class SourceSwitchButtonAction(ButtonAction):
         self._populate_source_device_list()
 
     def event_callback(self, event: Any, data: Any):
-        if "Short Up" not in str(event):
+        if event != Input.Key.Events.SHORT_UP:
             return
         if not self._device_id or self._hardware_device_node_id is None:
             return
@@ -1153,6 +1288,9 @@ class SliderAction(BaseAction):
     """Slider button (top/bottom half of virtual slider)"""
 
     ACTION_TYPE = ActionType.slider()
+    VOLUME_STEP_RANGE = (-20, 20)
+    VOLUME_STEP_SUBTITLE = "Positive = top slider, Negative = bottom"
+    SHOW_METERS_ROW = True
 
     def _build_config(self) -> ActionConfig:
         config = super()._build_config()
@@ -1184,11 +1322,11 @@ class SliderAction(BaseAction):
         return rows
 
     def _on_orientation_changed(self, combo: Gtk.ComboBoxText):
-        settings = self.get_settings()
-        settings["orientation"] = combo.get_active_id()
-        self.set_settings(settings)
+        self._persist_settings(orientation=combo.get_active_id())
         self._update_config()
 
     def event_callback(self, event: Any, data: Any):
-        if "Short Up" in str(event) and self._device_id:
-            self._core.set_volume_relative(self._device_id, self._volume_step)
+        if event == Input.Key.Events.SHORT_UP and self._device_id:
+            self._core.set_volume_relative(
+                self._device_id, self._volume_step, self._device_type
+            )

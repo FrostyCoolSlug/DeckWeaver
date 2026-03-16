@@ -35,7 +35,6 @@
     "ui.physical_device.empty": "No physical devices found",
     "ui.device_filter.title": "Device Type",
     "ui.device_filter.subtitle": "Filter by sink (output) or source (input) devices",
-    
     "ui.custom_icon.title": "Custom Icon",
     "ui.custom_icon.subtitle": "Select a custom icon file or use an icon from an installed icon library",
     "ui.icon_library_name.title": "Icon Library Name",

@@ -33,7 +33,6 @@
     "ui.physical_device.title": "Dispositivo Físico de Salida",
     "ui.physical_device.none": "Ningún dispositivo físico seleccionado",
     "ui.physical_device.empty": "No se encontraron dispositivos físicos",
-    
     "ui.custom_icon.title": "Icono Personalizado",
     "ui.custom_icon.subtitle": "Selecciona un archivo de icono personalizado o usa un icono de una biblioteca instalada",
     "ui.icon_library_name.title": "Nombre de Biblioteca de Iconos",

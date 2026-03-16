@@ -33,7 +33,6 @@
     "ui.physical_device.title": "Périphérique Physique de Sortie",
     "ui.physical_device.none": "Aucun périphérique physique sélectionné",
     "ui.physical_device.empty": "Aucun périphérique physique trouvé",
-    
     "ui.custom_icon.title": "Icône Personnalisée",
     "ui.custom_icon.subtitle": "Sélectionnez un fichier d'icône personnalisé ou utilisez une icône d'une bibliothèque installée",
     "ui.icon_library_name.title": "Nom Bibliothèque Icônes",

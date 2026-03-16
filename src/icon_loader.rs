@@ -9,10 +9,14 @@ const MIN_ICON_SIZE: u32 = 200;
 
 #[pyfunction]
 pub fn load_icon_to_png(path: &str) -> PyResult<Option<Vec<u8>>> {
+    Ok(load_icon_to_png_bytes(path))
+}
+
+pub fn load_icon_to_png_bytes(path: &str) -> Option<Vec<u8>> {
     let path_obj = Path::new(path);
 
     if !path_obj.exists() {
-        return Ok(None);
+        return None;
     }
 
     if path_obj
@@ -27,12 +31,12 @@ pub fn load_icon_to_png(path: &str) -> PyResult<Option<Vec<u8>>> {
     load_image_to_png(path)
 }
 
-fn load_svg_to_png(path: &str) -> PyResult<Option<Vec<u8>>> {
+fn load_svg_to_png(path: &str) -> Option<Vec<u8>> {
     let svg_data = match fs::read(path) {
         Ok(data) => data,
         Err(e) => {
             tracing::warn!("Failed to read SVG file {}: {}", path, e);
-            return Ok(None);
+            return None;
         }
     };
 
@@ -41,7 +45,7 @@ fn load_svg_to_png(path: &str) -> PyResult<Option<Vec<u8>>> {
         Ok(tree) => tree,
         Err(e) => {
             tracing::warn!("Failed to parse SVG {}: {}", path, e);
-            return Ok(None);
+            return None;
         }
     };
 
@@ -63,7 +67,7 @@ fn load_svg_to_png(path: &str) -> PyResult<Option<Vec<u8>>> {
         Some(pixmap) => pixmap,
         None => {
             tracing::warn!("Failed to create pixmap for SVG {}", path);
-            return Ok(None);
+            return None;
         }
     };
 
@@ -71,20 +75,20 @@ fn load_svg_to_png(path: &str) -> PyResult<Option<Vec<u8>>> {
     resvg::render(&tree, transform, &mut pixmap.as_mut());
 
     match pixmap.encode_png() {
-        Ok(png_data) => Ok(Some(png_data)),
+        Ok(png_data) => Some(png_data),
         Err(e) => {
             tracing::warn!("Failed to encode SVG as PNG {}: {}", path, e);
-            Ok(None)
+            None
         }
     }
 }
 
-fn load_image_to_png(path: &str) -> PyResult<Option<Vec<u8>>> {
+fn load_image_to_png(path: &str) -> Option<Vec<u8>> {
     let img = match image::open(path) {
         Ok(img) => img,
         Err(e) => {
             tracing::warn!("Failed to load image {}: {}", path, e);
-            return Ok(None);
+            return None;
         }
     };
 
@@ -111,9 +115,9 @@ fn load_image_to_png(path: &str) -> PyResult<Option<Vec<u8>>> {
             image::ColorType::Rgba8.into(),
         ) {
             tracing::warn!("Failed to encode image as PNG {}: {}", path, e);
-            return Ok(None);
+            return None;
         }
     }
 
-    Ok(Some(png_data))
+    Some(png_data)
 }

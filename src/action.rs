@@ -1,4 +1,5 @@
 use crate::devices::Device;
+use crate::devices::DeviceType;
 use parking_lot::RwLock;
 use pyo3::prelude::*;
 use std::collections::hash_map::DefaultHasher;
@@ -41,6 +42,8 @@ pub struct ActionConfig {
     #[pyo3(get, set)]
     pub device_id: Option<String>,
     #[pyo3(get, set)]
+    pub device_type: Option<DeviceType>,
+    #[pyo3(get, set)]
     pub volume_step: i8,
     #[pyo3(get, set)]
     pub width: u32,
@@ -61,7 +64,13 @@ pub struct ActionConfig {
     #[pyo3(get, set)]
     pub icon_png: Option<Vec<u8>>,
     #[pyo3(get, set)]
+    pub icon_path: Option<String>,
+    #[pyo3(get, set)]
     pub button_overlay: bool,
+    #[pyo3(get, set)]
+    pub source_mix_b: bool,
+    #[pyo3(get, set)]
+    pub show_action_page: bool,
 }
 
 #[pymethods]
@@ -78,6 +87,7 @@ impl ActionConfig {
             action_id,
             action_type,
             device_id: None,
+            device_type: None,
             volume_step: 5,
             width,
             height,
@@ -88,7 +98,10 @@ impl ActionConfig {
             orientation: "vertical".to_string(),
             is_top: true,
             icon_png: None,
+            icon_path: None,
             button_overlay: true,
+            source_mix_b: false,
+            show_action_page: false,
         }
     }
 }
@@ -115,7 +128,6 @@ pub struct ActionState {
     pub last_label: parking_lot::RwLock<Option<String>>,
     pub cached_icon: RwLock<Option<(u64, CachedIcon)>>,
     pub cached_base: RwLock<Option<CachedBaseRender>>,
-    pub cached_base_hash: parking_lot::RwLock<Option<u64>>,
 }
 
 impl ActionState {
@@ -129,7 +141,6 @@ impl ActionState {
             last_label: parking_lot::RwLock::new(None),
             cached_icon: RwLock::new(None),
             cached_base: RwLock::new(None),
-            cached_base_hash: parking_lot::RwLock::new(None),
         }
     }
 
@@ -138,6 +149,14 @@ impl ActionState {
         if let Some(ref device) = self.device {
             device.volume.hash(&mut hasher);
             device.is_muted.hash(&mut hasher);
+            device.source_mix_a_muted.hash(&mut hasher);
+            device.source_mix_b_muted.hash(&mut hasher);
+            device.source_mute_a_all.hash(&mut hasher);
+            device.source_mute_b_all.hash(&mut hasher);
+            device.source_mute_a_target_count.hash(&mut hasher);
+            device.source_mute_b_target_count.hash(&mut hasher);
+            device.source_volumes_linked.hash(&mut hasher);
+            device.target_mix_b.hash(&mut hasher);
             if let Some(color) = &device.color {
                 color.red.hash(&mut hasher);
                 color.green.hash(&mut hasher);
@@ -151,6 +170,7 @@ impl ActionState {
         if let Some(ref icon_png) = self.config.icon_png {
             icon_png.hash(&mut hasher);
         }
+        self.config.icon_path.hash(&mut hasher);
         if self.config.action_type == crate::action::ActionType::Slider {
             self.config.orientation.hash(&mut hasher);
             self.config.is_top.hash(&mut hasher);
@@ -158,35 +178,29 @@ impl ActionState {
         if self.config.action_type == crate::action::ActionType::Button {
             self.config.button_overlay.hash(&mut hasher);
         }
-        let current_hash = hasher.finish();
-
-        let mut cached_hash_guard = self.cached_base_hash.write();
-        if let Some(cached) = *cached_hash_guard {
-            if cached == current_hash {
-                return cached;
-            }
+        if self.config.action_type == crate::action::ActionType::Knob {
+            self.config.source_mix_b.hash(&mut hasher);
+            self.config.show_action_page.hash(&mut hasher);
         }
-        *cached_hash_guard = Some(current_hash);
-        current_hash
+        hasher.finish()
     }
 
     pub fn needs_base_rebuild(&self) -> bool {
         let current_hash = self.base_hash();
         let cached = self.cached_base.read();
-        cached
-            .as_ref()
-            .map_or(true, |c| c.base_hash != current_hash)
+        cached.as_ref().is_none_or(|c| c.base_hash != current_hash)
     }
 
-    pub fn get_cached_icon(&self, png_data: Option<&[u8]>, max_size: f32) -> Option<CachedIcon> {
-        let Some(png_data) = png_data else {
+    pub fn get_cached_icon(
+        &self,
+        png_data: Option<&[u8]>,
+        icon_path: Option<&str>,
+        max_size: f32,
+    ) -> Option<CachedIcon> {
+        let Some((icon_hash, png_data)) = self.resolve_icon_source(png_data, icon_path) else {
             *self.cached_icon.write() = None;
             return None;
         };
-
-        let mut hasher = DefaultHasher::new();
-        png_data.hash(&mut hasher);
-        let icon_hash = hasher.finish();
 
         {
             let cached = self.cached_icon.read();
@@ -197,7 +211,7 @@ impl ActionState {
             }
         }
 
-        let Ok(img) = image::load_from_memory(png_data) else {
+        let Ok(img) = image::load_from_memory(&png_data) else {
             return None;
         };
 
@@ -218,6 +232,25 @@ impl ActionState {
         *self.cached_icon.write() = Some((icon_hash, cached.clone()));
 
         Some(cached)
+    }
+
+    fn resolve_icon_source(
+        &self,
+        png_data: Option<&[u8]>,
+        icon_path: Option<&str>,
+    ) -> Option<(u64, Vec<u8>)> {
+        let mut hasher = DefaultHasher::new();
+        if let Some(png_data) = png_data {
+            0u8.hash(&mut hasher);
+            png_data.hash(&mut hasher);
+            return Some((hasher.finish(), png_data.to_vec()));
+        }
+
+        let icon_path = icon_path?;
+        1u8.hash(&mut hasher);
+        icon_path.hash(&mut hasher);
+        let png_data = crate::icon_loader::load_icon_to_png_bytes(icon_path)?;
+        Some((hasher.finish(), png_data))
     }
 
     pub fn label_changed(&self, new_label: Option<&str>) -> bool {
@@ -241,16 +274,30 @@ impl ActionState {
         let mut hasher = DefaultHasher::new();
         self.config.action_type.hash(&mut hasher);
         self.config.device_id.hash(&mut hasher);
+        self.config.device_type.hash(&mut hasher);
         self.config.meters_enabled.hash(&mut hasher);
         self.config.orientation.hash(&mut hasher);
         self.config.is_top.hash(&mut hasher);
         self.config.button_overlay.hash(&mut hasher);
+        self.config.device_type.hash(&mut hasher);
+        if self.config.action_type == crate::action::ActionType::Knob {
+            self.config.source_mix_b.hash(&mut hasher);
+            self.config.show_action_page.hash(&mut hasher);
+        }
         self.get_meter().hash(&mut hasher);
 
         if let Some(ref device) = self.device {
             device.id.hash(&mut hasher);
             device.volume.hash(&mut hasher);
             device.is_muted.hash(&mut hasher);
+            device.source_mix_a_muted.hash(&mut hasher);
+            device.source_mix_b_muted.hash(&mut hasher);
+            device.source_mute_a_all.hash(&mut hasher);
+            device.source_mute_b_all.hash(&mut hasher);
+            device.source_mute_a_target_count.hash(&mut hasher);
+            device.source_mute_b_target_count.hash(&mut hasher);
+            device.source_volumes_linked.hash(&mut hasher);
+            device.target_mix_b.hash(&mut hasher);
         } else {
             0u8.hash(&mut hasher);
         }

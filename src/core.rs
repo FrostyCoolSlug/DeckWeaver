@@ -12,7 +12,6 @@ use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tiny_skia::Pixmap;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 const RENDER_INTERVAL: Duration = Duration::from_micros(33333);
@@ -22,16 +21,50 @@ const RECONNECT_DELAY: Duration = Duration::from_secs(5);
 
 #[derive(Debug)]
 enum Command {
-    SetVolume { device_id: String, volume: u8 },
-    SetVolumeRelative { device_id: String, delta: i8 },
-    ToggleMute { device_id: String },
-    SetRoute {
-        source_id: String,
-        target_id: String,
-        enabled: bool,
+    SetVolume {
+        device_id: String,
+        device_type: Option<DeviceType>,
+        volume: u8,
     },
-    AttachPhysicalNode { target_id: String, node_id: u32 },
-    RemovePhysicalNode { target_id: String, index: usize },
+    SetVolumeRelative {
+        device_id: String,
+        device_type: Option<DeviceType>,
+        delta: i8,
+    },
+    ToggleMute {
+        device_id: String,
+        device_type: Option<DeviceType>,
+    },
+    SetSourceVolumeRelative {
+        device_id: String,
+        mix_b: bool,
+        delta: i8,
+    },
+    SetSourceMute {
+        device_id: String,
+        mix_b: bool,
+        muted: bool,
+    },
+    SetSourceVolumesLinked {
+        device_id: String,
+        linked: bool,
+    },
+    SetTargetMute {
+        device_id: String,
+        muted: bool,
+    },
+    SetTargetMix {
+        device_id: String,
+        mix_b: bool,
+    },
+    AttachPhysicalNode {
+        target_id: String,
+        node_id: u32,
+    },
+    RemovePhysicalNode {
+        target_id: String,
+        index: usize,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -41,7 +74,6 @@ struct PendingUpdate {
     height: Option<u32>,
     image_hash: Option<u64>,
     label: Option<String>,
-    generation: u64,
 }
 
 #[pyclass]
@@ -53,7 +85,6 @@ pub struct DeckWeaverCore {
     meter_data: Arc<RwLock<HashMap<String, u8>>>,
     command_tx: Arc<RwLock<Option<tokio::sync::mpsc::Sender<Command>>>>,
     pending_updates: Arc<RwLock<HashMap<String, PendingUpdate>>>,
-    page_generation: Arc<AtomicU64>,
 }
 
 #[pymethods]
@@ -68,7 +99,6 @@ impl DeckWeaverCore {
             meter_data: Arc::new(RwLock::new(HashMap::new())),
             command_tx: Arc::new(RwLock::new(None)),
             pending_updates: Arc::new(RwLock::new(HashMap::new())),
-            page_generation: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -107,15 +137,10 @@ impl DeckWeaverCore {
     }
 
     fn get_pending_updates<'a>(&self, py: Python<'a>) -> PyResult<Bound<'a, PyDict>> {
-        let current_generation = self.page_generation.load(Ordering::SeqCst);
         let mut updates = self.pending_updates.write();
 
         let dict = PyDict::new(py);
-        let to_remove: Vec<_> = updates
-            .iter()
-            .filter(|(_, update)| update.generation == current_generation)
-            .map(|(id, _)| id.clone())
-            .collect();
+        let to_remove: Vec<_> = updates.keys().cloned().collect();
 
         for action_id in &to_remove {
             let Some(update) = updates.get(action_id) else {
@@ -178,11 +203,12 @@ impl DeckWeaverCore {
             .unwrap_or_default()
     }
 
-    fn get_device(&self, device_id: &str) -> Option<Device> {
+    #[pyo3(signature = (device_id, device_type=None))]
+    fn get_device(&self, device_id: &str, device_type: Option<DeviceType>) -> Option<Device> {
         self.status
             .read()
             .as_ref()
-            .and_then(|s| s.get_device(device_id, None))
+            .and_then(|s| s.get_device(device_id, device_type))
     }
 
     #[pyo3(name = "get_target_sources")]
@@ -203,31 +229,122 @@ impl DeckWeaverCore {
             .unwrap_or_default()
     }
 
-    fn set_volume(&self, device_id: &str, volume: u8) -> bool {
+    fn infer_device_type(&self, device_id: &str, prefer_target: bool) -> Option<DeviceType> {
+        self.status
+            .read()
+            .as_ref()
+            .and_then(|status| status.infer_device_type(device_id, prefer_target))
+    }
+
+    #[pyo3(signature = (device_id, volume, device_type=None))]
+    fn set_volume(&self, device_id: &str, volume: u8, device_type: Option<DeviceType>) -> bool {
         self.send_command(Command::SetVolume {
             device_id: device_id.to_string(),
+            device_type,
             volume,
         })
     }
 
-    fn set_volume_relative(&self, device_id: &str, delta: i8) -> bool {
+    #[pyo3(signature = (device_id, delta, device_type=None))]
+    fn set_volume_relative(
+        &self,
+        device_id: &str,
+        delta: i8,
+        device_type: Option<DeviceType>,
+    ) -> bool {
         self.send_command(Command::SetVolumeRelative {
             device_id: device_id.to_string(),
+            device_type,
             delta,
         })
     }
 
-    fn toggle_mute(&self, device_id: &str) -> bool {
+    #[pyo3(signature = (device_id, device_type=None))]
+    fn toggle_mute(&self, device_id: &str, device_type: Option<DeviceType>) -> bool {
         self.send_command(Command::ToggleMute {
             device_id: device_id.to_string(),
+            device_type,
         })
     }
 
-    fn set_route(&self, source_id: &str, target_id: &str, enabled: bool) -> bool {
-        self.send_command(Command::SetRoute {
-            source_id: source_id.to_string(),
-            target_id: target_id.to_string(),
-            enabled,
+    fn set_source_volume_relative(&self, device_id: &str, mix_b: bool, delta: i8) -> bool {
+        self.send_command(Command::SetSourceVolumeRelative {
+            device_id: device_id.to_string(),
+            mix_b,
+            delta,
+        })
+    }
+
+    fn set_source_mute(&self, device_id: &str, mix_b: bool, muted: bool) -> bool {
+        self.send_command(Command::SetSourceMute {
+            device_id: device_id.to_string(),
+            mix_b,
+            muted,
+        })
+    }
+
+    fn set_target_mute(&self, device_id: &str, muted: bool) -> bool {
+        self.send_command(Command::SetTargetMute {
+            device_id: device_id.to_string(),
+            muted,
+        })
+    }
+
+    fn set_target_mix(&self, device_id: &str, mix_b: bool) -> bool {
+        self.send_command(Command::SetTargetMix {
+            device_id: device_id.to_string(),
+            mix_b,
+        })
+    }
+
+    fn toggle_target_mute(&self, device_id: &str) -> bool {
+        let muted = {
+            self.status
+                .read()
+                .as_ref()
+                .and_then(|status| status.get_device(device_id, Some(DeviceType::Target)))
+                .map(|device| device.is_muted)
+        };
+
+        muted.is_some_and(|muted| {
+            self.send_command(Command::SetTargetMute {
+                device_id: device_id.to_string(),
+                muted: !muted,
+            })
+        })
+    }
+
+    fn toggle_target_mix(&self, device_id: &str) -> bool {
+        let mix_b = {
+            self.status
+                .read()
+                .as_ref()
+                .and_then(|status| status.get_device(device_id, Some(DeviceType::Target)))
+                .and_then(|device| device.target_mix_b)
+        };
+
+        mix_b.is_some_and(|mix_b| {
+            self.send_command(Command::SetTargetMix {
+                device_id: device_id.to_string(),
+                mix_b: !mix_b,
+            })
+        })
+    }
+
+    fn toggle_source_volumes_linked(&self, device_id: &str) -> bool {
+        let linked = {
+            self.status
+                .read()
+                .as_ref()
+                .and_then(|status| status.get_device(device_id, Some(DeviceType::Source)))
+                .and_then(|device| device.source_volumes_linked)
+        };
+
+        linked.is_some_and(|linked| {
+            self.send_command(Command::SetSourceVolumesLinked {
+                device_id: device_id.to_string(),
+                linked: !linked,
+            })
         })
     }
 
@@ -237,9 +354,11 @@ impl DeckWeaverCore {
         };
 
         let attached = status.get_attached_output_hardware_devices(target_id);
-        let already_attached = attached
-            .iter()
-            .any(|device| device.node_id.is_some_and(|attached_id| attached_id == node_id));
+        let already_attached = attached.iter().any(|device| {
+            device
+                .node_id
+                .is_some_and(|attached_id| attached_id == node_id)
+        });
 
         let mut success = true;
 
@@ -270,24 +389,12 @@ impl DeckWeaverCore {
         success
     }
 
-    fn force_render(&self, action_id: &str) {
-        if let Some(state) = self.actions.read().get(action_id) {
-            state.last_render_hash.store(u64::MAX, Ordering::Relaxed);
-        }
-    }
-
     fn get_action_device_name(&self, action_id: &str) -> Option<String> {
         self.actions
             .read()
             .get(action_id)
             .and_then(|s| s.device.as_ref())
             .map(|d| d.name.clone())
-    }
-
-    fn clear_all_actions(&self) {
-        self.page_generation.fetch_add(1, Ordering::SeqCst);
-        self.actions.write().clear();
-        self.pending_updates.write().clear();
     }
 }
 
@@ -457,7 +564,7 @@ impl DeckWeaverCore {
                                                             let guard = actions.read();
                                                             guard.values().any(|s| {
                                                                 s.config.meters_enabled &&
-                                                                s.config.device_id.as_ref().map_or(false, |did| did == id)
+                                                                s.config.device_id.as_ref().is_some_and(|did| did == id)
                                                             })
                                                         };
 
@@ -508,25 +615,15 @@ impl DeckWeaverCore {
         let actions = self.actions.clone();
         let meter_data = self.meter_data.clone();
         let pending_updates = self.pending_updates.clone();
-        let page_generation = self.page_generation.clone();
 
         std::thread::Builder::new()
             .name("deckweaver-render".into())
             .spawn(move || {
                 let mut renderers = Renderers::new();
-                let mut last_generation = 0u64;
                 let mut last_available = false;
 
                 while running.load(Ordering::SeqCst) {
                     let frame_start = Instant::now();
-                    let current_generation = page_generation.load(Ordering::SeqCst);
-                    if current_generation != last_generation {
-                        last_generation = current_generation;
-                        std::thread::sleep(RENDER_INTERVAL);
-                        continue;
-                    }
-                    last_generation = current_generation;
-
                     let available = service_available.load(Ordering::Relaxed);
                     let availability_changed = available != last_available;
                     last_available = available;
@@ -551,7 +648,20 @@ impl DeckWeaverCore {
 
                             state.device = status_guard
                                 .as_ref()
-                                .and_then(|st| st.get_device(device_id, None));
+                                .and_then(|st| {
+                                    st.get_device(device_id, state.config.device_type).or_else(
+                                        || {
+                                            if state.config.action_type == ActionType::Slider {
+                                                st.get_device(device_id, None)
+                                            } else {
+                                                None
+                                            }
+                                        },
+                                    )
+                                })
+                                .map(|device| {
+                                    device.with_selected_source_mix(state.config.source_mix_b)
+                                });
 
                             if state.config.meters_enabled {
                                 let meter_guard = meter_data.read();
@@ -573,10 +683,9 @@ impl DeckWeaverCore {
                     if !label_updates.is_empty() {
                         let mut updates = pending_updates.write();
                         for (action_id, label) in label_updates {
-                            let should_update = updates
-                                .get(&action_id)
-                                .and_then(|u| u.label.as_ref())
-                                .map_or(true, |existing| existing != &label);
+                            let should_update =
+                                updates.get(&action_id).and_then(|u| u.label.as_ref())
+                                    != Some(&label);
 
                             if should_update {
                                 let update =
@@ -586,10 +695,8 @@ impl DeckWeaverCore {
                                         height: None,
                                         image_hash: None,
                                         label: None,
-                                        generation: current_generation,
                                     });
                                 update.label = Some(label);
-                                update.generation = current_generation;
                             }
                         }
                     }
@@ -609,21 +716,24 @@ impl DeckWeaverCore {
                                     ActionType::Knob => 52.0,
                                     _ => (s.config.width as f32) * 0.5,
                                 };
-                                let cached_icon =
-                                    s.get_cached_icon(s.config.icon_png.as_deref(), max_icon_size);
+                                let cached_icon = s.get_cached_icon(
+                                    s.config.icon_png.as_deref(),
+                                    s.config.icon_path.as_deref(),
+                                    max_icon_size,
+                                );
 
-                                let is_meter_cache_action = matches!(
-                                    s.config.action_type,
-                                    ActionType::Knob | ActionType::Slider
-                                ) && s.config.meters_enabled;
-                                let needs_base_rebuild =
-                                    is_meter_cache_action && s.needs_base_rebuild();
+                                let uses_knob_meter_cache = s.config.action_type
+                                    == ActionType::Knob
+                                    && s.config.meters_enabled;
+                                let needs_knob_base_rebuild =
+                                    uses_knob_meter_cache && s.needs_base_rebuild();
 
-                                let cached_base = if is_meter_cache_action && !needs_base_rebuild {
-                                    s.cached_base.read().clone()
-                                } else {
-                                    None
-                                };
+                                let cached_knob_base =
+                                    if uses_knob_meter_cache && !needs_knob_base_rebuild {
+                                        s.cached_base.read().clone()
+                                    } else {
+                                        None
+                                    };
 
                                 (
                                     id.clone(),
@@ -631,9 +741,9 @@ impl DeckWeaverCore {
                                     s.device.clone(),
                                     s.get_meter(),
                                     cached_icon,
-                                    cached_base,
-                                    is_meter_cache_action,
-                                    needs_base_rebuild,
+                                    cached_knob_base,
+                                    uses_knob_meter_cache,
+                                    needs_knob_base_rebuild,
                                 )
                             })
                             .collect()
@@ -645,45 +755,22 @@ impl DeckWeaverCore {
                         device,
                         meter,
                         cached_icon,
-                        cached_base,
-                        is_meter_cache_action,
-                        needs_base_rebuild,
+                        cached_knob_base,
+                        uses_knob_meter_cache,
+                        needs_knob_base_rebuild,
                     ) in tasks
                     {
-                        if page_generation.load(Ordering::SeqCst) != current_generation {
-                            break;
-                        }
-
-                        let cached_base = if is_meter_cache_action && needs_base_rebuild {
+                        let cached_knob_base = if uses_knob_meter_cache && needs_knob_base_rebuild {
                             if let Some(ref dev) = device {
-                                let is_source = dev.device_type == DeviceType::Source;
-                                let color = dev.color.as_ref().map(|c| (c.red, c.green, c.blue));
-                                let params = RenderParams {
-                                    volume: dev.volume,
-                                    is_muted: dev.is_muted,
-                                    is_source,
-                                    meter_value: 0,
-                                    device_color: color,
-                                    volume_bar_color: config.volume_bar_color,
-                                    meter_color: config.meter_color,
-                                    meter_invert: config.meter_invert,
-                                    meters_enabled: config.meters_enabled,
-                                };
-
-                                let base_pixmap = match config.action_type {
-                                    ActionType::Knob => renderers.knob.render_base(
-                                        &params,
-                                        config.icon_png.clone(),
-                                        cached_icon.as_ref(),
-                                    ),
-                                    ActionType::Slider => {
-                                        renderers.slider(config.width).render_base(&params)
-                                    }
-                                    _ => None,
-                                };
+                                let params = knob_render_params(&config, dev, 0);
+                                let base_pixmap = renderers.knob.render_base(
+                                    &params,
+                                    config.icon_png.clone(),
+                                    cached_icon.as_ref(),
+                                );
 
                                 if let Some(base_pixmap) = base_pixmap {
-                                    let guard = actions.write();
+                                    let guard = actions.read();
                                     if let Some(state) = guard.get(&action_id) {
                                         let base_hash = state.base_hash();
                                         let cached = crate::action::CachedBaseRender {
@@ -691,10 +778,8 @@ impl DeckWeaverCore {
                                             base_hash,
                                         };
                                         *state.cached_base.write() = Some(cached.clone());
-                                        drop(guard);
                                         Some(cached)
                                     } else {
-                                        drop(guard);
                                         None
                                     }
                                 } else {
@@ -704,7 +789,7 @@ impl DeckWeaverCore {
                                 None
                             }
                         } else {
-                            cached_base
+                            cached_knob_base
                         };
 
                         let result = if !available {
@@ -715,7 +800,7 @@ impl DeckWeaverCore {
                                 dev,
                                 meter,
                                 cached_icon.as_ref(),
-                                cached_base.as_ref(),
+                                cached_knob_base.as_ref(),
                             )
                         } else {
                             renderers.render_loading(&config)
@@ -727,10 +812,8 @@ impl DeckWeaverCore {
                             let image_hash = hasher.finish();
 
                             let mut updates = pending_updates.write();
-                            let should_update = updates
-                                .get(&action_id)
-                                .and_then(|u| u.image_hash)
-                                .map_or(true, |existing_hash| existing_hash != image_hash);
+                            let should_update = updates.get(&action_id).and_then(|u| u.image_hash)
+                                != Some(image_hash);
 
                             if should_update {
                                 let update =
@@ -740,13 +823,11 @@ impl DeckWeaverCore {
                                         height: None,
                                         image_hash: None,
                                         label: None,
-                                        generation: current_generation,
                                     });
                                 update.image = Some(bytes);
                                 update.width = Some(width);
                                 update.height = Some(height);
                                 update.image_hash = Some(image_hash);
-                                update.generation = current_generation;
                             }
                         }
                     }
@@ -824,10 +905,85 @@ fn apply_patch(status: &Arc<RwLock<Option<Status>>>, patch: &[Value]) {
     }
 }
 
+fn device_is_source(config: &ActionConfig, device: &Device) -> bool {
+    match config.device_type {
+        Some(DeviceType::Source) => true,
+        Some(DeviceType::Target) => false,
+        None => device.device_type == DeviceType::Source,
+    }
+}
+
+fn device_color(device: &Device) -> Option<(u8, u8, u8)> {
+    device
+        .color
+        .as_ref()
+        .map(|color| (color.red, color.green, color.blue))
+}
+
+fn knob_render_params(config: &ActionConfig, device: &Device, meter_value: u8) -> RenderParams {
+    let is_source = device_is_source(config, device);
+
+    RenderParams {
+        volume: device.volume,
+        is_muted: device.is_muted,
+        is_source,
+        meter_value,
+        device_color: device_color(device),
+        volume_bar_color: config.volume_bar_color,
+        meter_color: config.meter_color,
+        meter_invert: config.meter_invert,
+        meters_enabled: config.meters_enabled,
+        mix_b_active: if is_source {
+            config.source_mix_b
+        } else {
+            device.target_mix_b.unwrap_or(false)
+        },
+        source_mute_a: device.source_mix_a_muted.unwrap_or(false),
+        source_mute_b: device.source_mix_b_muted.unwrap_or(false),
+        source_mute_a_all: device.source_mute_a_all.unwrap_or(false),
+        source_mute_b_all: device.source_mute_b_all.unwrap_or(false),
+        source_mute_a_target_count: device.source_mute_a_target_count.unwrap_or(0),
+        source_mute_b_target_count: device.source_mute_b_target_count.unwrap_or(0),
+        source_volumes_linked: device.source_volumes_linked.unwrap_or(false),
+        show_action_page: config.show_action_page,
+    }
+}
+
+fn slider_render_params(config: &ActionConfig, device: &Device, meter_value: u8) -> RenderParams {
+    RenderParams {
+        volume: device.volume,
+        is_muted: false,
+        is_source: device_is_source(config, device),
+        meter_value,
+        device_color: device_color(device),
+        volume_bar_color: config.volume_bar_color,
+        meter_color: config.meter_color,
+        meter_invert: config.meter_invert,
+        meters_enabled: config.meters_enabled,
+        mix_b_active: false,
+        source_mute_a: false,
+        source_mute_b: false,
+        source_mute_a_all: false,
+        source_mute_b_all: false,
+        source_mute_a_target_count: 0,
+        source_mute_b_target_count: 0,
+        source_volumes_linked: false,
+        show_action_page: false,
+    }
+}
+
 fn build_command(status: &Arc<RwLock<Option<Status>>>, id: u64, cmd: Command) -> Option<String> {
     let data = match cmd {
-        Command::SetVolume { device_id, volume } => {
-            let device = status.read().as_ref()?.get_device(&device_id, None)?;
+        Command::SetVolume {
+            device_id,
+            device_type,
+            volume,
+        } => {
+            let status_guard = status.read();
+            let status_ref = status_guard.as_ref()?;
+            let device = status_ref
+                .get_device(&device_id, device_type)
+                .or_else(|| status_ref.get_device(&device_id, None))?;
             match device.device_type {
                 DeviceType::Source => {
                     serde_json::json!({"Pipewire": {"SetSourceVolume": [device_id, "A", volume]}})
@@ -837,8 +993,16 @@ fn build_command(status: &Arc<RwLock<Option<Status>>>, id: u64, cmd: Command) ->
                 }
             }
         }
-        Command::SetVolumeRelative { device_id, delta } => {
-            let device = status.read().as_ref()?.get_device(&device_id, None)?;
+        Command::SetVolumeRelative {
+            device_id,
+            device_type,
+            delta,
+        } => {
+            let status_guard = status.read();
+            let status_ref = status_guard.as_ref()?;
+            let device = status_ref
+                .get_device(&device_id, device_type)
+                .or_else(|| status_ref.get_device(&device_id, None))?;
             let new_volume = (device.volume as i16 + delta as i16).clamp(0, 100) as u8;
             match device.device_type {
                 DeviceType::Source => {
@@ -849,8 +1013,15 @@ fn build_command(status: &Arc<RwLock<Option<Status>>>, id: u64, cmd: Command) ->
                 }
             }
         }
-        Command::ToggleMute { device_id } => {
-            let device = status.read().as_ref()?.get_device(&device_id, None)?;
+        Command::ToggleMute {
+            device_id,
+            device_type,
+        } => {
+            let status_guard = status.read();
+            let status_ref = status_guard.as_ref()?;
+            let device = status_ref
+                .get_device(&device_id, device_type)
+                .or_else(|| status_ref.get_device(&device_id, None))?;
             match device.device_type {
                 DeviceType::Source => {
                     if device.is_muted {
@@ -865,11 +1036,74 @@ fn build_command(status: &Arc<RwLock<Option<Status>>>, id: u64, cmd: Command) ->
                 }
             }
         }
-        Command::SetRoute {
-            source_id,
-            target_id,
-            enabled,
-        } => serde_json::json!({"Pipewire": {"SetRoute": [source_id, target_id, enabled]}}),
+        Command::SetSourceVolumeRelative {
+            device_id,
+            mix_b,
+            delta,
+        } => {
+            let device = status
+                .read()
+                .as_ref()?
+                .get_device(&device_id, Some(DeviceType::Source))?;
+            if device.device_type != DeviceType::Source {
+                return None;
+            }
+            let current_volume = device.source_volume_for_mix(mix_b)?;
+            let new_volume = (current_volume as i16 + delta as i16).clamp(0, 100) as u8;
+            let mix = if mix_b { "B" } else { "A" };
+            serde_json::json!({"Pipewire": {"SetSourceVolume": [device_id, mix, new_volume]}})
+        }
+        Command::SetSourceMute {
+            device_id,
+            mix_b,
+            muted,
+        } => {
+            let device = status
+                .read()
+                .as_ref()?
+                .get_device(&device_id, Some(DeviceType::Source))?;
+            if device.device_type != DeviceType::Source {
+                return None;
+            }
+            let target = if mix_b { "TargetB" } else { "TargetA" };
+            if muted {
+                serde_json::json!({"Pipewire": {"AddSourceMuteTarget": [device_id, target]}})
+            } else {
+                serde_json::json!({"Pipewire": {"DelSourceMuteTarget": [device_id, target]}})
+            }
+        }
+        Command::SetSourceVolumesLinked { device_id, linked } => {
+            let device = status
+                .read()
+                .as_ref()?
+                .get_device(&device_id, Some(DeviceType::Source))?;
+            if device.device_type != DeviceType::Source {
+                return None;
+            }
+            serde_json::json!({"Pipewire": {"SetSourceVolumeLinked": [device_id, linked]}})
+        }
+        Command::SetTargetMute { device_id, muted } => {
+            let device = status
+                .read()
+                .as_ref()?
+                .get_device(&device_id, Some(DeviceType::Target))?;
+            if device.device_type != DeviceType::Target {
+                return None;
+            }
+            let state = if muted { "Muted" } else { "Unmuted" };
+            serde_json::json!({"Pipewire": {"SetTargetMuteState": [device_id, state]}})
+        }
+        Command::SetTargetMix { device_id, mix_b } => {
+            let device = status
+                .read()
+                .as_ref()?
+                .get_device(&device_id, Some(DeviceType::Target))?;
+            if device.device_type != DeviceType::Target {
+                return None;
+            }
+            let mix = if mix_b { "B" } else { "A" };
+            serde_json::json!({"Pipewire": {"SetTargetMix": [device_id, mix]}})
+        }
         Command::AttachPhysicalNode { target_id, node_id } => {
             serde_json::json!({"Pipewire": {"AttachPhysicalNode": [target_id, node_id]}})
         }
@@ -930,27 +1164,16 @@ impl Renderers {
         device: &Device,
         meter_value: u8,
         cached_icon: Option<&crate::action::CachedIcon>,
-        cached_base: Option<&crate::action::CachedBaseRender>,
+        cached_knob_base: Option<&crate::action::CachedBaseRender>,
     ) -> Option<(Vec<u8>, u32, u32)> {
-        let is_source = device.device_type == DeviceType::Source;
-        let color = device.color.as_ref().map(|c| (c.red, c.green, c.blue));
-
         match config.action_type {
             ActionType::Knob => {
-                let params = RenderParams {
-                    volume: device.volume,
-                    is_muted: device.is_muted,
-                    is_source,
-                    meter_value,
-                    device_color: color,
-                    volume_bar_color: config.volume_bar_color,
-                    meter_color: config.meter_color,
-                    meter_invert: config.meter_invert,
-                    meters_enabled: config.meters_enabled,
-                };
-                if let Some(cached_base) = cached_base {
+                let params = knob_render_params(config, device, meter_value);
+                if let Some(cached_base) = cached_knob_base {
                     let mut pixmap = cached_base.pixmap.clone();
-                    self.knob.render_meter_overlay(&mut pixmap, &params);
+                    if !params.show_action_page {
+                        self.knob.render_meter_overlay(&mut pixmap, &params);
+                    }
                     pixmap_to_rgba(&pixmap)
                 } else if let Some(cached) = cached_icon {
                     self.knob
@@ -961,52 +1184,12 @@ impl Renderers {
                 }
             }
             ActionType::Slider => {
-                let params = RenderParams {
-                    volume: device.volume,
-                    is_muted: false,
-                    is_source,
-                    meter_value,
-                    device_color: color,
-                    volume_bar_color: config.volume_bar_color,
-                    meter_color: config.meter_color,
-                    meter_invert: config.meter_invert,
-                    meters_enabled: config.meters_enabled,
-                };
-                if let Some(cached_base) = cached_base {
-                    let mut full = cached_base.pixmap.clone();
-                    self.slider(config.width)
-                        .render_meter_overlay(&mut full, &params);
-
-                    let mut result = Pixmap::new(config.width, config.width)?;
-                    let y_off = if config.is_top {
-                        0
-                    } else {
-                        config.width as usize
-                    };
-                    let row_bytes = config.width as usize * 4;
-
-                    for y in 0..config.width as usize {
-                        let src = (y + y_off) * row_bytes;
-                        let dst = y * row_bytes;
-                        result.data_mut()[dst..dst + row_bytes]
-                            .copy_from_slice(&full.data()[src..src + row_bytes]);
-                    }
-
-                    let is_horizontal = config.orientation == "horizontal";
-                    if is_horizontal {
-                        self.slider(config.width)
-                            .rotate_cw(&result)
-                            .and_then(|r| pixmap_to_rgba(&r))
-                    } else {
-                        pixmap_to_rgba(&result)
-                    }
-                } else {
-                    self.slider(config.width).render_internal_png(
-                        &params,
-                        config.is_top,
-                        config.orientation == "horizontal",
-                    )
-                }
+                let params = slider_render_params(config, device, meter_value);
+                self.slider(config.width).render_internal_png(
+                    &params,
+                    config.is_top,
+                    config.orientation == "horizontal",
+                )
             }
             ActionType::Button => {
                 let is_plus = if config.volume_step == 0 {

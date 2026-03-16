@@ -1,4 +1,12 @@
-use tiny_skia::{Color, FillRule, Paint, PathBuilder, Pixmap, Stroke, Transform};
+use ab_glyph::{point, Font, FontArc, GlyphId, PxScale, ScaleFont};
+use image::{Rgba as ImageRgba, RgbaImage};
+use imageproc::drawing::draw_text_mut;
+use std::fs;
+use std::sync::OnceLock;
+use tiny_skia::{
+    Color, FillRule, GradientStop, LinearGradient, Paint, PathBuilder, Pixmap, Point, SpreadMode,
+    Stroke, Transform,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Rgba {
@@ -23,6 +31,21 @@ impl Rgba {
 
     pub fn invert(self) -> Self {
         Self::new(255 - self.r, 255 - self.g, 255 - self.b, self.a)
+    }
+
+    pub fn blend(self, other: Self, amount: f32) -> Self {
+        let t = amount.clamp(0.0, 1.0);
+        let lerp = |from: u8, to: u8| from as f32 + (to as f32 - from as f32) * t;
+        Self::new(
+            lerp(self.r, other.r).round() as u8,
+            lerp(self.g, other.g).round() as u8,
+            lerp(self.b, other.b).round() as u8,
+            lerp(self.a, other.a).round() as u8,
+        )
+    }
+
+    pub fn with_alpha(self, a: u8) -> Self {
+        Self { a, ..self }
     }
 
     pub fn luminance(self) -> f32 {
@@ -71,23 +94,34 @@ pub struct RenderParams {
     pub meter_color: Option<(u8, u8, u8, u8)>,
     pub meter_invert: bool,
     pub meters_enabled: bool,
+    pub mix_b_active: bool,
+    pub source_mute_a: bool,
+    pub source_mute_b: bool,
+    pub source_mute_a_all: bool,
+    pub source_mute_b_all: bool,
+    pub source_mute_a_target_count: u8,
+    pub source_mute_b_target_count: u8,
+    pub source_volumes_linked: bool,
+    pub show_action_page: bool,
 }
 
 impl RenderParams {
+    pub fn accent_color(&self) -> Rgba {
+        self.volume_bar_color
+            .map(Rgba::from)
+            .or_else(|| self.device_color.map(Rgba::from))
+            .unwrap_or(if self.is_source {
+                COLOR_SOURCE_FILL
+            } else {
+                COLOR_TARGET_FILL
+            })
+    }
+
     pub fn fill_color(&self) -> Option<Rgba> {
         if self.volume == 0 {
             return None;
         }
-        Some(
-            self.volume_bar_color
-                .map(Rgba::from)
-                .or_else(|| self.device_color.map(Rgba::from))
-                .unwrap_or(if self.is_source {
-                    COLOR_SOURCE_FILL
-                } else {
-                    COLOR_TARGET_FILL
-                }),
-        )
+        Some(self.accent_color())
     }
 }
 
@@ -152,6 +186,38 @@ impl Rect {
                 None,
             );
         }
+    }
+
+    pub fn draw_vertical_gradient_filled(self, pixmap: &mut Pixmap, top: Rgba, bottom: Rgba) {
+        let Some(path) = rounded_rect_path(self.x, self.y, self.w, self.h, self.radius) else {
+            return;
+        };
+
+        let Some(shader) = LinearGradient::new(
+            Point::from_xy(self.x, self.y),
+            Point::from_xy(self.x, self.y + self.h),
+            vec![
+                GradientStop::new(0.0, top.as_color()),
+                GradientStop::new(1.0, bottom.as_color()),
+            ],
+            SpreadMode::Pad,
+            Transform::identity(),
+        ) else {
+            return;
+        };
+
+        let paint = Paint {
+            anti_alias: true,
+            shader,
+            ..Default::default()
+        };
+        pixmap.fill_path(
+            &path,
+            &paint,
+            FillRule::Winding,
+            Transform::identity(),
+            None,
+        );
     }
 
     pub fn draw_stroked(self, pixmap: &mut Pixmap, color: Rgba, width: f32) {
@@ -219,6 +285,22 @@ pub fn draw_diagonal_line(
     stroke_line(pixmap, x1, y1, x2, y2, width, color);
 }
 
+pub fn draw_mix_letter(pixmap: &mut Pixmap, rect: Rect, color: Rgba, mix_b: bool) {
+    let text = if mix_b { "B" } else { "A" };
+    let font_size = (rect.h * 1.46).min(rect.w * 1.8).max(12.0);
+    draw_text_centered(pixmap, text, rect, font_size, color);
+}
+
+pub fn draw_centered_text(
+    pixmap: &mut Pixmap,
+    text: &str,
+    rect: Rect,
+    font_size: f32,
+    color: Rgba,
+) {
+    draw_text_centered(pixmap, text, rect, font_size, color);
+}
+
 pub fn create_unavailable_pixmap(width: u32, height: u32) -> Option<Pixmap> {
     let mut pixmap = Pixmap::new(width, height)?;
     fill_background(&mut pixmap, COLOR_TRANSPARENT);
@@ -257,8 +339,173 @@ pub fn pixmap_to_rgba(pixmap: &Pixmap) -> Option<(Vec<u8>, u32, u32)> {
     Some((data.to_vec(), pixmap.width(), pixmap.height()))
 }
 
+pub fn blend_pixmap(dest: &mut Pixmap, src: &Pixmap, dest_x: i32, dest_y: i32) {
+    let src_data = src.data();
+    for y in 0..src.height() as i32 {
+        for x in 0..src.width() as i32 {
+            let dx = dest_x + x;
+            let dy = dest_y + y;
+            if dx < 0 || dy < 0 || dx >= dest.width() as i32 || dy >= dest.height() as i32 {
+                continue;
+            }
+
+            let src_idx = ((y as u32 * src.width() + x as u32) * 4) as usize;
+            let src_a = src_data[src_idx + 3] as f32 / 255.0;
+            if src_a <= 0.0 {
+                continue;
+            }
+
+            let dst_idx = ((dy as u32 * dest.width() + dx as u32) * 4) as usize;
+            let dst_data = dest.data_mut();
+            let dst_r = dst_data[dst_idx] as f32;
+            let dst_g = dst_data[dst_idx + 1] as f32;
+            let dst_b = dst_data[dst_idx + 2] as f32;
+            let dst_a = dst_data[dst_idx + 3] as f32 / 255.0;
+            let out_a = src_a + dst_a * (1.0 - src_a);
+
+            let blend = |src_channel: u8, dst_channel: f32| -> u8 {
+                if out_a <= 0.0 {
+                    0
+                } else {
+                    (((src_channel as f32 * src_a) + (dst_channel * dst_a * (1.0 - src_a))) / out_a)
+                        .round() as u8
+                }
+            };
+
+            dst_data[dst_idx] = blend(src_data[src_idx], dst_r);
+            dst_data[dst_idx + 1] = blend(src_data[src_idx + 1], dst_g);
+            dst_data[dst_idx + 2] = blend(src_data[src_idx + 2], dst_b);
+            dst_data[dst_idx + 3] = (out_a * 255.0).round() as u8;
+        }
+    }
+}
+
 pub fn create_filled_pixmap(width: u32, height: u32, color: Rgba) -> Option<Pixmap> {
     let mut pixmap = Pixmap::new(width, height)?;
     fill_background(&mut pixmap, color);
     Some(pixmap)
+}
+
+fn mix_font() -> Option<&'static FontArc> {
+    static FONT: OnceLock<Option<FontArc>> = OnceLock::new();
+    const FONT_PATHS: &[&str] = &[
+        "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/liberation/LiberationSans-Bold.ttf",
+        "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
+    ];
+
+    FONT.get_or_init(|| {
+        for path in FONT_PATHS {
+            let Ok(bytes) = fs::read(path) else {
+                continue;
+            };
+            if let Ok(font) = FontArc::try_from_vec(bytes) {
+                return Some(font);
+            }
+        }
+        None
+    })
+    .as_ref()
+}
+
+fn draw_text_centered(pixmap: &mut Pixmap, text: &str, rect: Rect, font_size: f32, color: Rgba) {
+    let Some(font) = mix_font() else {
+        return;
+    };
+
+    let scale = PxScale::from(font_size);
+    let width = rect.w.ceil().max(1.0) as u32;
+    let height = rect.h.ceil().max(1.0) as u32;
+    let Some((min_x, min_y, max_x, max_y)) = text_pixel_bounds(font, scale, text) else {
+        return;
+    };
+
+    let text_w = (max_x - min_x).ceil().max(1.0);
+    let text_h = (max_y - min_y).ceil().max(1.0);
+    let text_x = ((width as f32 - text_w) * 0.5 - min_x).round() as i32;
+    let text_y = ((height as f32 - text_h) * 0.5 - min_y).round() as i32;
+
+    let mut rgba = RgbaImage::from_pixel(width, height, ImageRgba([0, 0, 0, 0]));
+    draw_text_mut(
+        &mut rgba,
+        ImageRgba([color.r, color.g, color.b, color.a]),
+        text_x,
+        text_y,
+        scale,
+        font,
+        text,
+    );
+
+    blend_rgba_image(pixmap, &rgba, rect.x.round() as i32, rect.y.round() as i32);
+}
+
+fn text_pixel_bounds(font: &FontArc, scale: PxScale, text: &str) -> Option<(f32, f32, f32, f32)> {
+    let scaled = font.as_scaled(scale);
+    let mut pen_x = 0.0f32;
+    let mut last: Option<GlyphId> = None;
+    let mut min_x = f32::INFINITY;
+    let mut min_y = f32::INFINITY;
+    let mut max_x = f32::NEG_INFINITY;
+    let mut max_y = f32::NEG_INFINITY;
+
+    for c in text.chars() {
+        let glyph_id = scaled.glyph_id(c);
+        let glyph = glyph_id.with_scale_and_position(scale, point(pen_x, scaled.ascent()));
+        pen_x += scaled.h_advance(glyph_id);
+        if let Some(prev) = last {
+            pen_x += scaled.kern(glyph_id, prev);
+        }
+        last = Some(glyph_id);
+
+        if let Some(outlined) = scaled.outline_glyph(glyph) {
+            let bb = outlined.px_bounds();
+            min_x = min_x.min(bb.min.x);
+            min_y = min_y.min(bb.min.y);
+            max_x = max_x.max(bb.max.x);
+            max_y = max_y.max(bb.max.y);
+        }
+    }
+
+    if min_x.is_finite() && min_y.is_finite() && max_x.is_finite() && max_y.is_finite() {
+        Some((min_x, min_y, max_x, max_y))
+    } else {
+        None
+    }
+}
+
+fn blend_rgba_image(pixmap: &mut Pixmap, rgba: &RgbaImage, dest_x: i32, dest_y: i32) {
+    for (ix, iy, pixel) in rgba.enumerate_pixels() {
+        let px = dest_x + ix as i32;
+        let py = dest_y + iy as i32;
+        if px < 0 || py < 0 || px >= pixmap.width() as i32 || py >= pixmap.height() as i32 {
+            continue;
+        }
+
+        let src_a = pixel[3] as f32 / 255.0;
+        if src_a <= 0.0 {
+            continue;
+        }
+
+        let idx = ((py as u32 * pixmap.width() + px as u32) * 4) as usize;
+        let data = pixmap.data_mut();
+        let dst_r = data[idx] as f32;
+        let dst_g = data[idx + 1] as f32;
+        let dst_b = data[idx + 2] as f32;
+        let dst_a = data[idx + 3] as f32 / 255.0;
+        let out_a = src_a + dst_a * (1.0 - src_a);
+
+        let blend = |src: u8, dst: f32| -> u8 {
+            if out_a <= 0.0 {
+                0
+            } else {
+                (((src as f32 * src_a) + (dst * dst_a * (1.0 - src_a))) / out_a).round() as u8
+            }
+        };
+
+        data[idx] = blend(pixel[0], dst_r);
+        data[idx + 1] = blend(pixel[1], dst_g);
+        data[idx + 2] = blend(pixel[2], dst_b);
+        data[idx + 3] = (out_a * 255.0).round() as u8;
+    }
 }

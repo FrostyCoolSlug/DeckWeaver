@@ -33,7 +33,6 @@
     "ui.physical_device.title": "物理输出设备",
     "ui.physical_device.none": "未选择物理设备",
     "ui.physical_device.empty": "未找到物理设备",
-    
     "ui.custom_icon.title": "自定义图标",
     "ui.custom_icon.subtitle": "选择自定义图标文件或使用已安装图标库中的图标",
     "ui.icon_library_name.title": "图标库名称",

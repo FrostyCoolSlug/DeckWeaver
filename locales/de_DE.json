@@ -33,7 +33,6 @@
     "ui.physical_device.title": "Physisches Ausgabegerät",
     "ui.physical_device.none": "Kein physisches Gerät ausgewählt",
     "ui.physical_device.empty": "Keine physischen Geräte gefunden",
-    
     "ui.custom_icon.title": "Benutzerdefiniertes Icon",
     "ui.custom_icon.subtitle": "Wählen Sie eine benutzerdefinierte Icon-Datei oder verwenden Sie ein Icon aus einer installierten Icon-Bibliothek",
     "ui.icon_library_name.title": "Icon Bibliotheksname",
