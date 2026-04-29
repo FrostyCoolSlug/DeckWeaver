@@ -6,7 +6,6 @@ const CORNER_INSET: f32 = 16.0;
 const BAR_WIDTH: f32 = 25.0;
 const BAR_OFFSET_Y: f32 = 0.0;
 const STROKE_WIDTH: f32 = 2.0;
-const METER_LIGHTEN_AMOUNT: f32 = 0.42;
 
 #[pyclass]
 pub struct SliderRenderer {
@@ -207,7 +206,7 @@ impl SliderRenderer {
                 if available > 0.0 {
                     let meter_h = (params.meter_value as f32 / 100.0) * available;
                     let meter_y = fill_y + inset + available - meter_h;
-                    let meter_color = fc.blend(COLOR_WHITE, METER_LIGHTEN_AMOUNT);
+                    let meter_color = meter_overlay_color(fc);
                     Rect::new(inner_x, meter_y, inner_w, meter_h, 0.0)
                         .draw_filled(full, meter_color);
                 }

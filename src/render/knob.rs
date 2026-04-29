@@ -5,7 +5,6 @@ use tiny_skia::Pixmap;
 const ICON_MAX_SIZE: f32 = 52.0;
 const BAR_HEIGHT: f32 = 14.0;
 const STROKE_WIDTH: f32 = 2.0;
-const METER_LIGHTEN_AMOUNT: f32 = 0.42;
 const MIX_LABEL_X: f32 = 130.0;
 const MIX_LABEL_Y: f32 = 5.0;
 const MIX_LABEL_W: f32 = 60.0;
@@ -180,7 +179,7 @@ impl KnobRenderer {
             if let Some(fc) = fill_color {
                 let meter_w = (params.meter_value as f32 / 100.0) * fill_width;
                 if meter_w > 0.0 {
-                    let meter_color = fc.blend(COLOR_WHITE, METER_LIGHTEN_AMOUNT);
+                    let meter_color = meter_overlay_color(fc);
                     Rect::new(inner_x, inner_y, meter_w, inner_h, 0.0)
                         .draw_filled(pixmap, meter_color);
                 }
