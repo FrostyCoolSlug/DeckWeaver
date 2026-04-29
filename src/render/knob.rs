@@ -28,7 +28,6 @@ const COLOR_MIX_A: Rgba = Rgba::rgb(106, 196, 205);
 const COLOR_MIX_B: Rgba = Rgba::rgb(242, 146, 44);
 const COLOR_PANEL_SLOT: Rgba = Rgba::rgb(40, 43, 41);
 const COLOR_PANEL_BASE: Rgba = Rgba::rgb(45, 50, 48);
-const COLOR_LINKED: Rgba = Rgba::rgb(130, 90, 140);
 
 #[pyclass]
 pub struct KnobRenderer {
@@ -166,23 +165,14 @@ impl KnobRenderer {
         let inset = STROKE_WIDTH * 0.5;
         let inner_x = bar_x + inset;
         let inner_y = bar_y + inset;
+        let inner_w = (bar_w - inset * 2.0).max(0.0);
         let inner_h = (BAR_HEIGHT - inset * 2.0).max(0.0);
 
-        let fill_color = Some(if params.is_source && params.source_volumes_linked {
-            COLOR_LINKED
-        } else {
-            self.mix_color(params.mix_b_active)
-        });
-        let fill_width = ((params.volume as f32 / 100.0) * bar_w - inset * 2.0).max(0.0);
-
-        if params.meter_value > 0 && fill_width > 0.0 && inner_h > 0.0 {
-            if let Some(fc) = fill_color {
-                let meter_w = (params.meter_value as f32 / 100.0) * fill_width;
-                if meter_w > 0.0 {
-                    let meter_color = meter_overlay_color(fc);
-                    Rect::new(inner_x, inner_y, meter_w, inner_h, 0.0)
-                        .draw_filled(pixmap, meter_color);
-                }
+        if params.meter_value > 0 && inner_w > 0.0 && inner_h > 3.0 {
+            let meter_w = (params.meter_value as f32 / 100.0) * inner_w;
+            if meter_w > 0.0 {
+                Rect::new(inner_x, inner_y + inner_h - 3.0, meter_w, 3.0, 0.0)
+                    .draw_filled(pixmap, COLOR_BLACK);
             }
         }
     }
@@ -255,7 +245,7 @@ impl KnobRenderer {
         let (bar_x, bar_y, bar_w) = self.main_bar_bounds();
         let fill_width = (params.volume as f32 / 100.0) * bar_w;
         let bar_color = if params.is_source && params.source_volumes_linked {
-            COLOR_LINKED
+            params.accent_color()
         } else {
             self.mix_color(params.mix_b_active)
         };

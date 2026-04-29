@@ -74,44 +74,6 @@ impl From<(u8, u8, u8, u8)> for Rgba {
     }
 }
 
-pub fn wcag_contrast_ratio(a: f32, b: f32) -> f32 {
-    let lighter = a.max(b);
-    let darker = a.min(b);
-    (lighter + 0.05) / (darker + 0.05)
-}
-
-const MIN_METER_CONTRAST: f32 = 3.0;
-const MAX_METER_BLEND: f32 = 0.65;
-
-pub fn meter_overlay_color(fill: Rgba) -> Rgba {
-    let fill_lum = fill.luminance();
-
-    // Fill luminance > 0.30 means even pure white can't achieve 3:1 — blend toward black.
-    // Otherwise blend toward white (dark fills).
-    let (target, _target_lum) = if fill_lum > 0.30 {
-        (COLOR_BLACK, 0.0)
-    } else {
-        (COLOR_WHITE, 1.0)
-    };
-
-    let mut lo = 0.0;
-    let mut hi = 1.0;
-
-    for _ in 0..10 {
-        let mid = (lo + hi) / 2.0;
-        let candidate = fill.blend(target, mid);
-        let ratio = wcag_contrast_ratio(fill_lum, candidate.luminance());
-
-        if ratio >= MIN_METER_CONTRAST {
-            hi = mid;
-        } else {
-            lo = mid;
-        }
-    }
-
-    fill.blend(target, hi.min(MAX_METER_BLEND))
-}
-
 pub const COLOR_TRANSPARENT: Rgba = Rgba::new(0, 0, 0, 0);
 pub const COLOR_BLACK: Rgba = Rgba::rgb(0, 0, 0);
 pub const COLOR_WHITE: Rgba = Rgba::rgb(255, 255, 255);
