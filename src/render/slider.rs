@@ -7,9 +7,6 @@ const BAR_WIDTH: f32 = 25.0;
 const BAR_OFFSET_Y: f32 = 0.0;
 const STROKE_WIDTH: f32 = 2.0;
 const METER_LIGHTEN_AMOUNT: f32 = 0.42;
-const PANEL_INSET: f32 = 4.0;
-const PANEL_RADIUS: f32 = 0.0;
-const COLOR_PANEL_BASE: Rgba = Rgba::rgb(45, 50, 48);
 
 #[pyclass]
 pub struct SliderRenderer {
@@ -144,131 +141,22 @@ impl SliderRenderer {
         is_top: bool,
         is_horizontal: bool,
     ) -> Option<Pixmap> {
-        if is_horizontal {
-            let mut background = self.render_single_panel(params)?;
-            let mut bars = Pixmap::new(self.button_size, self.button_size * 2)?;
-            fill_background(&mut bars, COLOR_TRANSPARENT);
-            self.draw_slider_stack(&mut bars, params);
-            if params.meters_enabled && params.meter_value > 0 {
-                self.render_meter_overlay(&mut bars, params);
-            }
-            let cropped = self.extract_square(&bars, is_top)?;
-            let rotated = self.rotate_cw(&cropped)?;
-            blend_pixmap(&mut background, &rotated, 0, 0);
-            return Some(background);
-        }
-
-        let mut full = self.render_base(params)?;
-        if params.meters_enabled && params.meter_value > 0 {
-            self.render_meter_overlay(&mut full, params);
-        }
-        self.extract_square(&full, is_top)
-    }
-
-    pub fn render_base(&self, params: &RenderParams) -> Option<Pixmap> {
-        let mut full = self.render_panel_stack(params)?;
-        self.draw_slider_stack(&mut full, params);
-        Some(full)
-    }
-
-    pub fn render_meter_overlay(&self, full: &mut Pixmap, params: &RenderParams) {
-        let size = self.button_size as f32;
-        let double_h = size * 2.0;
-        let slider_y = CORNER_INSET + BAR_OFFSET_Y;
-        let slider_h = double_h - CORNER_INSET * 2.0 - BAR_OFFSET_Y;
-        let slider_x = (size - BAR_WIDTH) / 2.0;
-        let inset = STROKE_WIDTH * 0.5;
-        let inner_x = slider_x + inset;
-        let inner_w = (BAR_WIDTH - inset * 2.0).max(0.0);
-
-        let fill_color = params.fill_color();
-        let fill_h = (params.volume as f32 / 100.0) * slider_h;
-
-        if params.meter_value > 0 && fill_h > 0.0 {
-            if let Some(fc) = fill_color {
-                let fill_y = slider_y + slider_h - fill_h;
-                let available = (fill_h - inset * 2.0).max(0.0);
-                if available > 0.0 {
-                    let meter_h = (params.meter_value as f32 / 100.0) * available;
-                    let meter_y = fill_y + inset + available - meter_h;
-                    let meter_color = fc.blend(COLOR_WHITE, METER_LIGHTEN_AMOUNT);
-                    Rect::new(inner_x, meter_y, inner_w, meter_h, 0.0)
-                        .draw_filled(full, meter_color);
-                }
-            }
-        }
-    }
-
-    pub fn rotate_cw(&self, pixmap: &Pixmap) -> Option<Pixmap> {
-        let (w, h) = (pixmap.width(), pixmap.height());
-        let mut rotated = Pixmap::new(h, w)?;
-        let (src, dst) = (pixmap.data(), rotated.data_mut());
-
-        for y in 0..h {
-            for x in 0..w {
-                let si = ((y * w + x) * 4) as usize;
-                let di = ((x * h + (h - 1 - y)) * 4) as usize;
-                dst[di..di + 4].copy_from_slice(&src[si..si + 4]);
-            }
-        }
-        Some(rotated)
-    }
-
-    fn render_panel_stack(&self, params: &RenderParams) -> Option<Pixmap> {
-        let size = self.button_size as f32;
         let mut full = Pixmap::new(self.button_size, self.button_size * 2)?;
         fill_background(&mut full, COLOR_TRANSPARENT);
 
-        let panel_w = size - PANEL_INSET * 2.0;
-        let panel_h = size - PANEL_INSET * 2.0;
-        let top_panel = Rect::new(PANEL_INSET, PANEL_INSET, panel_w, panel_h, PANEL_RADIUS);
-        let bottom_panel = Rect::new(
-            PANEL_INSET,
-            size + PANEL_INSET,
-            panel_w,
-            panel_h,
-            PANEL_RADIUS,
-        );
-        let accent = params.accent_color();
-        let gradient_start = top_panel.y;
-        let gradient_end = bottom_panel.y + bottom_panel.h;
-        let gradient_span = (gradient_end - gradient_start).max(1.0);
-        let gradient_bottom = accent.with_alpha(77);
+        self.draw_slider_stack(&mut full, params);
 
-        for panel in [top_panel, bottom_panel] {
-            panel.draw_filled(&mut full, COLOR_PANEL_BASE);
-            let top_t = ((panel.y - gradient_start) / gradient_span).clamp(0.0, 1.0);
-            let bottom_t = ((panel.y + panel.h - gradient_start) / gradient_span).clamp(0.0, 1.0);
-            panel.draw_vertical_gradient_filled(
-                &mut full,
-                COLOR_TRANSPARENT.blend(gradient_bottom, top_t),
-                COLOR_TRANSPARENT.blend(gradient_bottom, bottom_t),
-            );
+        if params.meters_enabled && params.meter_value > 0 {
+            self.render_meter_overlay(&mut full, params);
         }
 
-        Some(full)
-    }
+        let square = self.extract_square(&full, is_top)?;
 
-    fn render_single_panel(&self, params: &RenderParams) -> Option<Pixmap> {
-        let size = self.button_size as f32;
-        let mut panel = Pixmap::new(self.button_size, self.button_size)?;
-        fill_background(&mut panel, COLOR_TRANSPARENT);
-
-        let background = Rect::new(
-            PANEL_INSET,
-            PANEL_INSET,
-            size - PANEL_INSET * 2.0,
-            size - PANEL_INSET * 2.0,
-            PANEL_RADIUS,
-        );
-        background.draw_filled(&mut panel, COLOR_PANEL_BASE);
-        background.draw_vertical_gradient_filled(
-            &mut panel,
-            COLOR_TRANSPARENT,
-            params.accent_color().with_alpha(77),
-        );
-
-        Some(panel)
+        if is_horizontal {
+            Some(self.rotate_cw(&square)?)
+        } else {
+            Some(square)
+        }
     }
 
     fn draw_slider_stack(&self, pixmap: &mut Pixmap, params: &RenderParams) {
@@ -297,6 +185,49 @@ impl SliderRenderer {
         }
 
         bar.draw_stroked(pixmap, COLOR_BLACK, STROKE_WIDTH);
+    }
+
+    fn render_meter_overlay(&self, full: &mut Pixmap, params: &RenderParams) {
+        let size = self.button_size as f32;
+        let double_h = size * 2.0;
+        let slider_y = CORNER_INSET + BAR_OFFSET_Y;
+        let slider_h = double_h - CORNER_INSET * 2.0 - BAR_OFFSET_Y;
+        let slider_x = (size - BAR_WIDTH) / 2.0;
+        let inset = STROKE_WIDTH * 0.5;
+        let inner_x = slider_x + inset;
+        let inner_w = (BAR_WIDTH - inset * 2.0).max(0.0);
+
+        let fill_color = params.fill_color();
+        let fill_h = (params.volume as f32 / 100.0) * slider_h;
+
+        if params.meter_value > 0 && fill_h > 0.0 {
+            if let Some(fc) = fill_color {
+                let fill_y = slider_y + slider_h - fill_h;
+                let available = (fill_h - inset * 2.0).max(0.0);
+                if available > 0.0 {
+                    let meter_h = (params.meter_value as f32 / 100.0) * available;
+                    let meter_y = fill_y + inset + available - meter_h;
+                    let meter_color = fc.blend(COLOR_WHITE, METER_LIGHTEN_AMOUNT);
+                    Rect::new(inner_x, meter_y, inner_w, meter_h, 0.0)
+                        .draw_filled(full, meter_color);
+                }
+            }
+        }
+    }
+
+    fn rotate_cw(&self, pixmap: &Pixmap) -> Option<Pixmap> {
+        let (w, h) = (pixmap.width(), pixmap.height());
+        let mut rotated = Pixmap::new(h, w)?;
+        let (src, dst) = (pixmap.data(), rotated.data_mut());
+
+        for y in 0..h {
+            for x in 0..w {
+                let si = ((y * w + x) * 4) as usize;
+                let di = ((x * h + (h - 1 - y)) * 4) as usize;
+                dst[di..di + 4].copy_from_slice(&src[si..si + 4]);
+            }
+        }
+        Some(rotated)
     }
 
     fn extract_square(&self, pixmap: &Pixmap, is_top: bool) -> Option<Pixmap> {

@@ -364,47 +364,6 @@ pub fn pixmap_to_rgba(pixmap: &Pixmap) -> Option<(Vec<u8>, u32, u32)> {
     Some((data.to_vec(), pixmap.width(), pixmap.height()))
 }
 
-pub fn blend_pixmap(dest: &mut Pixmap, src: &Pixmap, dest_x: i32, dest_y: i32) {
-    let src_data = src.data();
-    for y in 0..src.height() as i32 {
-        for x in 0..src.width() as i32 {
-            let dx = dest_x + x;
-            let dy = dest_y + y;
-            if dx < 0 || dy < 0 || dx >= dest.width() as i32 || dy >= dest.height() as i32 {
-                continue;
-            }
-
-            let src_idx = ((y as u32 * src.width() + x as u32) * 4) as usize;
-            let src_a = src_data[src_idx + 3] as f32 / 255.0;
-            if src_a <= 0.0 {
-                continue;
-            }
-
-            let dst_idx = ((dy as u32 * dest.width() + dx as u32) * 4) as usize;
-            let dst_data = dest.data_mut();
-            let dst_r = dst_data[dst_idx] as f32;
-            let dst_g = dst_data[dst_idx + 1] as f32;
-            let dst_b = dst_data[dst_idx + 2] as f32;
-            let dst_a = dst_data[dst_idx + 3] as f32 / 255.0;
-            let out_a = src_a + dst_a * (1.0 - src_a);
-
-            let blend = |src_channel: u8, dst_channel: f32| -> u8 {
-                if out_a <= 0.0 {
-                    0
-                } else {
-                    (((src_channel as f32 * src_a) + (dst_channel * dst_a * (1.0 - src_a))) / out_a)
-                        .round() as u8
-                }
-            };
-
-            dst_data[dst_idx] = blend(src_data[src_idx], dst_r);
-            dst_data[dst_idx + 1] = blend(src_data[src_idx + 1], dst_g);
-            dst_data[dst_idx + 2] = blend(src_data[src_idx + 2], dst_b);
-            dst_data[dst_idx + 3] = (out_a * 255.0).round() as u8;
-        }
-    }
-}
-
 pub fn create_filled_pixmap(width: u32, height: u32, color: Rgba) -> Option<Pixmap> {
     let mut pixmap = Pixmap::new(width, height)?;
     fill_background(&mut pixmap, color);
