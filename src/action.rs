@@ -30,6 +30,30 @@ impl ActionType {
     fn button() -> Self {
         ActionType::Button
     }
+
+    fn __repr__(&self) -> &'static str {
+        match self {
+            ActionType::Knob => "ActionType.Knob",
+            ActionType::Slider => "ActionType.Slider",
+            ActionType::Button => "ActionType.Button",
+        }
+    }
+
+    fn __richcmp__(&self, other: &Self, op: pyo3::basic::CompareOp) -> bool {
+        match op {
+            pyo3::basic::CompareOp::Eq => self == other,
+            pyo3::basic::CompareOp::Ne => self != other,
+            _ => false,
+        }
+    }
+
+    fn __hash__(&self) -> u64 {
+        match self {
+            ActionType::Knob => 0,
+            ActionType::Slider => 1,
+            ActionType::Button => 2,
+        }
+    }
 }
 
 #[pyclass]
@@ -70,7 +94,11 @@ pub struct ActionConfig {
     #[pyo3(get, set)]
     pub source_mix_b: bool,
     #[pyo3(get, set)]
-    pub show_action_page: bool,
+    pub mute_profile_index: u8,
+    #[pyo3(get, set)]
+    pub mute_profile_muted: bool,
+    #[pyo3(get, set)]
+    pub mute_profile_data: Vec<bool>,
 }
 
 #[pymethods]
@@ -101,7 +129,9 @@ impl ActionConfig {
             icon_path: None,
             button_overlay: true,
             source_mix_b: false,
-            show_action_page: false,
+            mute_profile_index: 0,
+            mute_profile_muted: false,
+            mute_profile_data: vec![false, false],
         }
     }
 }
@@ -151,10 +181,6 @@ impl ActionState {
             device.is_muted.hash(&mut hasher);
             device.source_mix_a_muted.hash(&mut hasher);
             device.source_mix_b_muted.hash(&mut hasher);
-            device.source_mute_a_all.hash(&mut hasher);
-            device.source_mute_b_all.hash(&mut hasher);
-            device.source_mute_a_target_count.hash(&mut hasher);
-            device.source_mute_b_target_count.hash(&mut hasher);
             device.source_volumes_linked.hash(&mut hasher);
             device.target_mix_b.hash(&mut hasher);
             if let Some(color) = &device.color {
@@ -180,7 +206,8 @@ impl ActionState {
         }
         if self.config.action_type == crate::action::ActionType::Knob {
             self.config.source_mix_b.hash(&mut hasher);
-            self.config.show_action_page.hash(&mut hasher);
+            self.config.mute_profile_index.hash(&mut hasher);
+            self.config.mute_profile_data.hash(&mut hasher);
         }
         hasher.finish()
     }
@@ -282,7 +309,8 @@ impl ActionState {
         self.config.device_type.hash(&mut hasher);
         if self.config.action_type == crate::action::ActionType::Knob {
             self.config.source_mix_b.hash(&mut hasher);
-            self.config.show_action_page.hash(&mut hasher);
+            self.config.mute_profile_index.hash(&mut hasher);
+            self.config.mute_profile_data.hash(&mut hasher);
         }
         self.get_meter().hash(&mut hasher);
 
@@ -292,10 +320,6 @@ impl ActionState {
             device.is_muted.hash(&mut hasher);
             device.source_mix_a_muted.hash(&mut hasher);
             device.source_mix_b_muted.hash(&mut hasher);
-            device.source_mute_a_all.hash(&mut hasher);
-            device.source_mute_b_all.hash(&mut hasher);
-            device.source_mute_a_target_count.hash(&mut hasher);
-            device.source_mute_b_target_count.hash(&mut hasher);
             device.source_volumes_linked.hash(&mut hasher);
             device.target_mix_b.hash(&mut hasher);
         } else {

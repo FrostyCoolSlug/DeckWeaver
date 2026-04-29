@@ -1,5 +1,6 @@
 use ab_glyph::{point, Font, FontArc, GlyphId, PxScale, ScaleFont};
 use image::{Rgba as ImageRgba, RgbaImage};
+use image::imageops::FilterType;
 use imageproc::drawing::draw_text_mut;
 use std::fs;
 use std::sync::OnceLock;
@@ -95,14 +96,9 @@ pub struct RenderParams {
     pub meter_invert: bool,
     pub meters_enabled: bool,
     pub mix_b_active: bool,
-    pub source_mute_a: bool,
-    pub source_mute_b: bool,
-    pub source_mute_a_all: bool,
-    pub source_mute_b_all: bool,
-    pub source_mute_a_target_count: u8,
-    pub source_mute_b_target_count: u8,
     pub source_volumes_linked: bool,
-    pub show_action_page: bool,
+    pub mute_profile: u8,
+    pub mute_profile_muted: bool,
 }
 
 impl RenderParams {
@@ -285,20 +281,49 @@ pub fn draw_diagonal_line(
     stroke_line(pixmap, x1, y1, x2, y2, width, color);
 }
 
-pub fn draw_mix_letter(pixmap: &mut Pixmap, rect: Rect, color: Rgba, mix_b: bool) {
-    let text = if mix_b { "B" } else { "A" };
-    let font_size = (rect.h * 1.46).min(rect.w * 1.8).max(12.0);
-    draw_text_centered(pixmap, text, rect, font_size, color);
-}
+const TEXT_SUPERSAMPLE: u32 = 2;
 
-pub fn draw_centered_text(
+pub fn draw_right_text(
     pixmap: &mut Pixmap,
     text: &str,
     rect: Rect,
     font_size: f32,
     color: Rgba,
 ) {
-    draw_text_centered(pixmap, text, rect, font_size, color);
+    let Some(font) = mix_font() else {
+        return;
+    };
+
+    let scale = PxScale::from(font_size * TEXT_SUPERSAMPLE as f32);
+    let width = (rect.w.ceil().max(1.0) as u32) * TEXT_SUPERSAMPLE;
+    let height = (rect.h.ceil().max(1.0) as u32) * TEXT_SUPERSAMPLE;
+    let Some((min_x, min_y, max_x, max_y)) = text_pixel_bounds(font, scale, text) else {
+        return;
+    };
+
+    let text_w = (max_x - min_x).ceil().max(1.0);
+    let text_h = (max_y - min_y).ceil().max(1.0);
+    let text_x = (width as f32 - text_w - min_x).round() as i32;
+    let text_y = ((height as f32 - text_h) * 0.5 - min_y).round() as i32;
+
+    let mut rgba = RgbaImage::from_pixel(width, height, ImageRgba([0, 0, 0, 0]));
+    draw_text_mut(
+        &mut rgba,
+        ImageRgba([color.r, color.g, color.b, color.a]),
+        text_x,
+        text_y,
+        scale,
+        font,
+        text,
+    );
+
+    let scaled = image::imageops::resize(
+        &rgba,
+        width / TEXT_SUPERSAMPLE,
+        height / TEXT_SUPERSAMPLE,
+        FilterType::Lanczos3,
+    );
+    blend_rgba_image(pixmap, &scaled, rect.x.round() as i32, rect.y.round() as i32);
 }
 
 pub fn create_unavailable_pixmap(width: u32, height: u32) -> Option<Pixmap> {
@@ -389,6 +414,8 @@ pub fn create_filled_pixmap(width: u32, height: u32, color: Rgba) -> Option<Pixm
 fn mix_font() -> Option<&'static FontArc> {
     static FONT: OnceLock<Option<FontArc>> = OnceLock::new();
     const FONT_PATHS: &[&str] = &[
+        "/usr/share/fonts/TTF/Inter-Bold.ttf",
+        "/usr/share/fonts/truetype/inter/Inter-Bold.ttf",
         "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
         "/usr/share/fonts/liberation/LiberationSans-Bold.ttf",
@@ -407,37 +434,6 @@ fn mix_font() -> Option<&'static FontArc> {
         None
     })
     .as_ref()
-}
-
-fn draw_text_centered(pixmap: &mut Pixmap, text: &str, rect: Rect, font_size: f32, color: Rgba) {
-    let Some(font) = mix_font() else {
-        return;
-    };
-
-    let scale = PxScale::from(font_size);
-    let width = rect.w.ceil().max(1.0) as u32;
-    let height = rect.h.ceil().max(1.0) as u32;
-    let Some((min_x, min_y, max_x, max_y)) = text_pixel_bounds(font, scale, text) else {
-        return;
-    };
-
-    let text_w = (max_x - min_x).ceil().max(1.0);
-    let text_h = (max_y - min_y).ceil().max(1.0);
-    let text_x = ((width as f32 - text_w) * 0.5 - min_x).round() as i32;
-    let text_y = ((height as f32 - text_h) * 0.5 - min_y).round() as i32;
-
-    let mut rgba = RgbaImage::from_pixel(width, height, ImageRgba([0, 0, 0, 0]));
-    draw_text_mut(
-        &mut rgba,
-        ImageRgba([color.r, color.g, color.b, color.a]),
-        text_x,
-        text_y,
-        scale,
-        font,
-        text,
-    );
-
-    blend_rgba_image(pixmap, &rgba, rect.x.round() as i32, rect.y.round() as i32);
 }
 
 fn text_pixel_bounds(font: &FontArc, scale: PxScale, text: &str) -> Option<(f32, f32, f32, f32)> {

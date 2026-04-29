@@ -1,5 +1,6 @@
 """StreamController plugin entry point - thin wrapper over Rust core"""
 
+import json
 import logging
 import os
 import time
@@ -257,8 +258,6 @@ class BaseAction(ActionBase):
         self._icon_path: Optional[str] = None
         self._device_type: Optional[DeviceType] = None
         self._source_mix = "A"
-        self._show_action_page = False
-        self._source_mute_overrides: dict[bool, bool] = {}
         self.device_expander: Optional[Adw.ExpanderRow] = None
         self.icon_row: Optional[Adw.ActionRow] = None
         self.icon_preview: Optional[Gtk.Image] = None
@@ -343,7 +342,10 @@ class BaseAction(ActionBase):
             config.meter_color = self._meter_color
         if self.ACTION_TYPE == ActionType.knob():
             config.source_mix_b = self._source_mix == "B"
-            config.show_action_page = self._show_action_page
+            config.mute_profile_index = self._mute_profile_index
+            config.mute_profile_data = self._mute_profile_data
+            if self._mute_profile_index < len(self._mute_profile_data):
+                config.mute_profile_muted = self._mute_profile_data[self._mute_profile_index]
         config.icon_path = self._resolved_icon_path()
 
         return config
@@ -360,7 +362,6 @@ class BaseAction(ActionBase):
         self._volume_bar_color = self._load_color_tuple(settings, "volume_bar_color")
         self._icon_path = settings.get("icon_path_from_picker")
         self._source_mix = "B" if settings.get("source_mix") == "B" else "A"
-        self._show_action_page = False
         if self._device_id and self._device_type is None:
             inferred_type = self._infer_device_type(self._device_id)
             if inferred_type is not None:
@@ -455,7 +456,6 @@ class BaseAction(ActionBase):
         self._device_id = device.id
         self._device_name = device.name
         self._device_type = device.device_type
-        self._source_mute_overrides.clear()
         self._persist_settings(
             device_id=device.id,
             device_name=device.name,
@@ -467,76 +467,13 @@ class BaseAction(ActionBase):
             return None
         if self._device_type is None:
             self._device_type = self._infer_device_type(self._device_id)
-        device = self._core.get_device(self._device_id, self._device_type)
-        if device:
-            self._sync_source_mute_overrides(device)
-        return device
+        return self._core.get_device(self._device_id, self._device_type)
 
     def _is_selected_source_device(self) -> bool:
         if self._device_type is not None:
             return self._device_type.is_source()
         device = self._get_selected_device()
         return bool(device and device.device_type.is_source())
-
-    def _get_touch_slot_bounds(self) -> Optional[tuple[int, int, int, int]]:
-        try:
-            inp = self.get_input()
-            touch = inp.get_touch_screen()
-            x1, _y1, x2, y2 = touch.get_dial_image_area(self.input_ident)
-            if x2 > x1 and y2 > 0:
-                return int(x1), int(x2), int(x2 - x1), int(y2)
-        except Exception:
-            pass
-
-        try:
-            screen_width, screen_height = self.deck_controller.get_touchscreen_image_size()
-        except Exception:
-            screen_width, screen_height = 800, 100
-
-        try:
-            dial_count = len(self.deck_controller.inputs.get(Input.Dial, [])) or 1
-        except Exception:
-            dial_count = 4
-
-        dial_index = getattr(self.input_ident, "index", 0)
-        start_x = int((dial_index / dial_count) * screen_width)
-        end_x = int(((dial_index + 1) / dial_count) * screen_width)
-        segment_width = max(1, end_x - start_x)
-        return start_x, end_x, segment_width, int(screen_height)
-
-    def _set_action_page_visible(self, visible: bool):
-        self._show_action_page = visible
-        self._update_config()
-
-    def _source_device_muted(self, device: Optional[Device], mix_b: bool) -> bool:
-        if not device:
-            return False
-        muted = device.source_mix_b_muted if mix_b else device.source_mix_a_muted
-        return bool(muted)
-
-    def _sync_source_mute_overrides(self, device: Device):
-        for mix_b in (False, True):
-            if mix_b not in self._source_mute_overrides:
-                continue
-            if self._source_mute_overrides[mix_b] == self._source_device_muted(device, mix_b):
-                self._source_mute_overrides.pop(mix_b, None)
-
-    def _set_source_mute_state(self, mix_b: bool, muted: bool):
-        if not self._device_id:
-            return
-        self._source_mute_overrides[mix_b] = muted
-        self._core.set_source_mute(self._device_id, mix_b, muted)
-
-    def _effective_source_mute_state(self, mix_b: bool) -> bool:
-        if mix_b in self._source_mute_overrides:
-            return self._source_mute_overrides[mix_b]
-        device = self._get_selected_device()
-        return self._source_device_muted(device, mix_b)
-
-    def _toggle_source_mute_preset(self, mix_b: bool):
-        if not self._device_id:
-            return
-        self._set_source_mute_state(mix_b, not self._effective_source_mute_state(mix_b))
 
     def _toggle_source_link(self):
         if not self._device_id:
@@ -848,12 +785,38 @@ class KnobAction(BaseAction):
     ACTION_TYPE = ActionType.knob()
     DOUBLE_TAP_WINDOW_MS = 275
     SHOW_METERS_ROW = True
+    MUTE_PROFILE_COUNT = 2
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._pending_touch_tap_count = 0
         self._pending_touch_timeout_id: Optional[int] = None
         self._last_touch_tap_ts = 0.0
+        self._mute_profile_index = 0
+        self._mute_profile_data: list[bool] = [False, False]
+
+    def _load_settings(self):
+        super()._load_settings()
+        settings = self.get_settings()
+        self._mute_profile_index = int(settings.get("mute_profile_index", 0))
+        raw = settings.get("mute_profile_data")
+        self._mute_profile_data = []
+        if raw and isinstance(raw, str):
+            try:
+                parsed: list = json.loads(raw)
+                for entry in parsed:
+                    if isinstance(entry, dict):
+                        self._mute_profile_data.append(bool(entry.get("a", entry.get("muted", False))))
+                    elif isinstance(entry, bool):
+                        self._mute_profile_data.append(entry)
+                    else:
+                        self._mute_profile_data.append(False)
+            except (json.JSONDecodeError, TypeError):
+                pass
+        while len(self._mute_profile_data) < self.MUTE_PROFILE_COUNT:
+            self._mute_profile_data.append(False)
+        if len(self._mute_profile_data) > self.MUTE_PROFILE_COUNT:
+            self._mute_profile_data = self._mute_profile_data[:self.MUTE_PROFILE_COUNT]
 
     def _set_knob_volume_relative(self, delta: int):
         if not self._device_id:
@@ -894,18 +857,26 @@ class KnobAction(BaseAction):
         self._last_touch_tap_ts = 0.0
 
     def _handle_touchscreen_single_tap(self):
-        if self._is_selected_source_device():
-            self._toggle_source_mute_preset(False)
-            return
+        """Cycle to the next mute profile (P1 -> P2 -> P3 -> P4 -> P1 ...)"""
+        self._mute_profile_index = (self._mute_profile_index + 1) % self.MUTE_PROFILE_COUNT
+        self._apply_mute_profile()
+        self._persist_settings(mute_profile_index=self._mute_profile_index)
 
-        if self._device_id:
-            self._core.toggle_target_mute(self._device_id)
+    def _apply_mute_profile(self):
+        """Apply the active mute profile via the Rust core."""
+        config = self._build_config()
+        self._core.apply_mute_profile(config)
+
+    def _save_mute_for_profile(self, muted: bool):
+        """Save a mute state to the active profile and persist."""
+        idx = self._mute_profile_index
+        if idx >= len(self._mute_profile_data):
+            return
+        self._mute_profile_data[idx] = muted
+        self._persist_settings(mute_profile_data=json.dumps(self._mute_profile_data))
 
     def _handle_touchscreen_double_tap(self):
-        if self._is_selected_source_device():
-            self._toggle_source_mute_preset(True)
-            return
-
+        """Toggle between Mix A and Mix B"""
         self._toggle_knob_mix()
 
     def _flush_pending_touch_tap(self) -> bool:
@@ -923,11 +894,6 @@ class KnobAction(BaseAction):
         return False
 
     def _handle_touchscreen_short_press(self, data: Any):
-        if self._show_action_page:
-            self._cancel_pending_touch_tap()
-            self._handle_action_page_touch(data)
-            return
-
         now = time.monotonic()
         within_window = (
             self._pending_touch_timeout_id is not None
@@ -950,57 +916,6 @@ class KnobAction(BaseAction):
             self._flush_pending_touch_tap,
         )
 
-    def _handle_action_page_touch(self, data: Any):
-        if not isinstance(data, dict) or not self._device_id:
-            return
-        device = self._get_selected_device()
-        if not device:
-            return
-
-        slot = self._get_touch_slot_bounds()
-        if slot is None:
-            return
-        start_x, _end_x, slot_width, slot_height = slot
-
-        raw_x = max(0.0, min(float(slot_width), float(data.get("x", 0.0)) - float(start_x)))
-        raw_y = max(0.0, min(float(slot_height), float(data.get("y", 0.0))))
-
-        handled = False
-        if device.device_type.is_source():
-            col = min(2, max(0, int((raw_x * 3.0) / max(1.0, float(slot_width)))))
-            row = min(1, max(0, int((raw_y * 2.0) / max(1.0, float(slot_height)))))
-            if row == 0 and col == 0:
-                self._set_knob_mix(False)
-                handled = True
-            elif row == 0 and col == 1:
-                self._set_knob_mix(True)
-                handled = True
-            elif row == 0 and col == 2:
-                self._toggle_source_link()
-                handled = True
-            elif row == 1 and col == 0:
-                self._toggle_source_mute_preset(False)
-                handled = True
-            elif row == 1 and col == 1:
-                self._toggle_source_mute_preset(True)
-                handled = True
-        else:
-            col = min(2, max(0, int((raw_x * 3.0) / max(1.0, float(slot_width)))))
-            if col == 0:
-                self._core.toggle_target_mute(self._device_id)
-                handled = True
-            elif col == 1:
-                self._set_knob_mix(False)
-                handled = True
-            elif col == 2:
-                self._set_knob_mix(True)
-                handled = True
-
-        if handled:
-            self._update_config()
-        else:
-            self._set_action_page_visible(False)
-
     def event_callback(self, event: Any, data: Any):
         if not self._device_id:
             return
@@ -1010,14 +925,19 @@ class KnobAction(BaseAction):
         elif event == Input.Dial.Events.TURN_CCW:
             self._set_knob_volume_relative(-self._volume_step)
         elif event == Input.Dial.Events.SHORT_UP:
-            self._toggle_knob_mix()
-            self._show_action_page = False
+            # Toggle the active profile and apply to the selected mix.
+            if self._device_id and self._mute_profile_index < len(self._mute_profile_data):
+                current = self._mute_profile_data[self._mute_profile_index]
+                self._save_mute_for_profile(not current)
+                self._apply_mute_profile()
             self._update_config()
         elif event == Input.Dial.Events.SHORT_TOUCH_PRESS:
             self._handle_touchscreen_short_press(data)
         elif event == Input.Dial.Events.LONG_TOUCH_PRESS:
             self._cancel_pending_touch_tap()
-            self._set_action_page_visible(True)
+            if self._is_selected_source_device():
+                self._toggle_source_link()
+                self._update_config()
 
 
 class ButtonAction(BaseAction):

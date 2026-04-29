@@ -348,6 +348,27 @@ impl DeckWeaverCore {
         })
     }
 
+    fn apply_mute_profile(&self, config: &ActionConfig) -> bool {
+        let Some(device_id) = &config.device_id else {
+            return false;
+        };
+        let idx = config.mute_profile_index as usize;
+        if idx >= config.mute_profile_data.len() {
+            return false;
+        }
+        let muted = config.mute_profile_data[idx];
+        match config.device_type {
+            Some(DeviceType::Source) => {
+                let mix_b = idx == 1;
+                self.set_source_mute(device_id, mix_b, muted)
+            }
+            Some(DeviceType::Target) => {
+                self.set_target_mute(device_id, muted)
+            }
+            _ => false,
+        }
+    }
+
     fn switch_output_hardware_device(&self, target_id: &str, node_id: u32) -> bool {
         let Some(status) = self.status.read().as_ref().cloned() else {
             return false;
@@ -938,14 +959,9 @@ fn knob_render_params(config: &ActionConfig, device: &Device, meter_value: u8) -
         } else {
             device.target_mix_b.unwrap_or(false)
         },
-        source_mute_a: device.source_mix_a_muted.unwrap_or(false),
-        source_mute_b: device.source_mix_b_muted.unwrap_or(false),
-        source_mute_a_all: device.source_mute_a_all.unwrap_or(false),
-        source_mute_b_all: device.source_mute_b_all.unwrap_or(false),
-        source_mute_a_target_count: device.source_mute_a_target_count.unwrap_or(0),
-        source_mute_b_target_count: device.source_mute_b_target_count.unwrap_or(0),
         source_volumes_linked: device.source_volumes_linked.unwrap_or(false),
-        show_action_page: config.show_action_page,
+        mute_profile: config.mute_profile_index,
+        mute_profile_muted: config.mute_profile_muted,
     }
 }
 
@@ -961,14 +977,9 @@ fn slider_render_params(config: &ActionConfig, device: &Device, meter_value: u8)
         meter_invert: config.meter_invert,
         meters_enabled: config.meters_enabled,
         mix_b_active: false,
-        source_mute_a: false,
-        source_mute_b: false,
-        source_mute_a_all: false,
-        source_mute_b_all: false,
-        source_mute_a_target_count: 0,
-        source_mute_b_target_count: 0,
         source_volumes_linked: false,
-        show_action_page: false,
+        mute_profile: 0,
+        mute_profile_muted: false,
     }
 }
 
@@ -1171,9 +1182,7 @@ impl Renderers {
                 let params = knob_render_params(config, device, meter_value);
                 if let Some(cached_base) = cached_knob_base {
                     let mut pixmap = cached_base.pixmap.clone();
-                    if !params.show_action_page {
-                        self.knob.render_meter_overlay(&mut pixmap, &params);
-                    }
+                    self.knob.render_meter_overlay(&mut pixmap, &params);
                     pixmap_to_rgba(&pixmap)
                 } else if let Some(cached) = cached_icon {
                     self.knob

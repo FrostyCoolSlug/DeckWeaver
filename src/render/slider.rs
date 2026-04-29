@@ -61,14 +61,9 @@ impl SliderRenderer {
             meter_invert,
             meters_enabled,
             mix_b_active: false,
-            source_mute_a: false,
-            source_mute_b: false,
-            source_mute_a_all: false,
-            source_mute_b_all: false,
-            source_mute_a_target_count: 0,
-            source_mute_b_target_count: 0,
             source_volumes_linked: false,
-            show_action_page: false,
+            mute_profile: 0,
+            mute_profile_muted: false,
         };
         self.encode_pixmap(self.render_internal(&params, is_top, is_horizontal))
     }
@@ -92,14 +87,9 @@ impl SliderRenderer {
             meter_invert: true,
             meters_enabled: false,
             mix_b_active: false,
-            source_mute_a: false,
-            source_mute_b: false,
-            source_mute_a_all: false,
-            source_mute_b_all: false,
-            source_mute_a_target_count: 0,
-            source_mute_b_target_count: 0,
             source_volumes_linked: false,
-            show_action_page: false,
+            mute_profile: 0,
+            mute_profile_muted: false,
         };
         self.encode_pixmap(self.render_internal(&params, true, false))
     }
@@ -141,14 +131,9 @@ impl SliderRenderer {
             meter_invert: true,
             meters_enabled: false,
             mix_b_active: false,
-            source_mute_a: false,
-            source_mute_b: false,
-            source_mute_a_all: false,
-            source_mute_b_all: false,
-            source_mute_a_target_count: 0,
-            source_mute_b_target_count: 0,
             source_volumes_linked: false,
-            show_action_page: false,
+            mute_profile: 0,
+            mute_profile_muted: false,
         };
         pixmap_to_rgba(&self.render_internal(&params, true, false)?)
     }
