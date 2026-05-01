@@ -195,14 +195,21 @@ impl SliderRenderer {
         let inset = STROKE_WIDTH * 0.5;
         let inner_x = slider_x + inset;
         let inner_w = (BAR_WIDTH - inset * 2.0).max(0.0);
-        let inner_h = (slider_h - inset * 2.0).max(0.0);
 
-        if params.meter_value > 0 && inner_w >= 3.0 && inner_h > 0.0 {
-            let meter_h = (params.meter_value as f32 / 100.0) * inner_h;
-            if meter_h > 0.0 {
-                let meter_y = slider_y + slider_h - inset - meter_h;
-                Rect::new(inner_x + inner_w - 3.0, meter_y, 3.0, meter_h, 0.0)
-                    .draw_filled(full, COLOR_BLACK);
+        let fill_color = params.fill_color();
+        let fill_h = (params.volume as f32 / 100.0) * slider_h;
+
+        if params.meter_value > 0 && fill_h > 0.0 {
+            if let Some(fc) = fill_color {
+                let fill_y = slider_y + slider_h - fill_h;
+                let available = (fill_h - inset * 2.0).max(0.0);
+                if available > 0.0 {
+                    let meter_h = (params.meter_value as f32 / 100.0) * available;
+                    let meter_y = fill_y + inset + available - meter_h;
+                    let meter_color = meter_overlay_color(fc);
+                    Rect::new(inner_x, meter_y, inner_w, meter_h, 0.0)
+                        .draw_filled(full, meter_color);
+                }
             }
         }
     }
