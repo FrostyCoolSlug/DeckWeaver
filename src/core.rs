@@ -203,6 +203,24 @@ impl DeckWeaverCore {
             .unwrap_or_default()
     }
 
+    #[pyo3(name = "get_physical_sources")]
+    fn py_get_physical_sources(&self) -> Vec<Device> {
+        self.status
+            .read()
+            .as_ref()
+            .map(Status::get_physical_sources)
+            .unwrap_or_default()
+    }
+
+    #[pyo3(name = "get_physical_targets")]
+    fn py_get_physical_targets(&self) -> Vec<Device> {
+        self.status
+            .read()
+            .as_ref()
+            .map(Status::get_physical_targets)
+            .unwrap_or_default()
+    }
+
     #[pyo3(signature = (device_id, device_type=None))]
     fn get_device(&self, device_id: &str, device_type: Option<DeviceType>) -> Option<Device> {
         self.status
@@ -227,6 +245,22 @@ impl DeckWeaverCore {
             .as_ref()
             .map(Status::get_output_hardware_devices)
             .unwrap_or_default()
+    }
+
+    #[pyo3(name = "get_input_hardware_devices")]
+    fn py_get_input_hardware_devices(&self) -> Vec<HardwareDevice> {
+        self.status
+            .read()
+            .as_ref()
+            .map(Status::get_input_hardware_devices)
+            .unwrap_or_default()
+    }
+
+    fn get_hardware_device_name(&self, node_id: u32, is_input: bool) -> Option<String> {
+        self.status
+            .read()
+            .as_ref()
+            .and_then(|s| s.get_hardware_device_name(node_id, is_input))
     }
 
     fn infer_device_type(&self, device_id: &str, prefer_target: bool) -> Option<DeviceType> {
@@ -370,11 +404,23 @@ impl DeckWeaverCore {
     }
 
     fn switch_output_hardware_device(&self, target_id: &str, node_id: u32) -> bool {
+        self.switch_physical_hardware_device(target_id, node_id, false)
+    }
+
+    fn switch_input_hardware_device(&self, source_id: &str, node_id: u32) -> bool {
+        self.switch_physical_hardware_device(source_id, node_id, true)
+    }
+
+    fn switch_physical_hardware_device(&self, device_id: &str, node_id: u32, is_input: bool) -> bool {
         let Some(status) = self.status.read().as_ref().cloned() else {
             return false;
         };
 
-        let attached = status.get_attached_output_hardware_devices(target_id);
+        let attached = if is_input {
+            status.get_attached_input_hardware_devices(device_id)
+        } else {
+            status.get_attached_output_hardware_devices(device_id)
+        };
         let already_attached = attached.iter().any(|device| {
             device
                 .node_id
@@ -385,7 +431,7 @@ impl DeckWeaverCore {
 
         if !already_attached {
             success &= self.send_command(Command::AttachPhysicalNode {
-                target_id: target_id.to_string(),
+                target_id: device_id.to_string(),
                 node_id,
             });
         }
@@ -402,7 +448,7 @@ impl DeckWeaverCore {
 
         for index in remove_indices {
             success &= self.send_command(Command::RemovePhysicalNode {
-                target_id: target_id.to_string(),
+                target_id: device_id.to_string(),
                 index,
             });
         }

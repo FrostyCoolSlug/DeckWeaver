@@ -252,27 +252,99 @@ impl Status {
             .collect()
     }
 
+    pub fn get_input_hardware_devices(&self) -> Vec<HardwareDevice> {
+        self.audio.devices[PipeweaverDeviceType::Source]
+            .iter()
+            .map(Self::convert_hardware_device)
+            .collect()
+    }
+
+    pub fn get_hardware_device_name(&self, node_id: u32, is_input: bool) -> Option<String> {
+        let device_type = if is_input {
+            PipeweaverDeviceType::Source
+        } else {
+            PipeweaverDeviceType::Target
+        };
+        self.audio.devices[device_type]
+            .iter()
+            .find(|d| d.node_id == node_id)
+            .and_then(|d| d.name.clone().or_else(|| d.description.clone()))
+    }
+
     pub fn get_attached_output_hardware_devices(&self, target_id: &str) -> Vec<HardwareDevice> {
-        let Some(target) = self
+        self.get_attached_physical_hardware_devices_by_id(
+            target_id,
+            &self.devices_tree().targets.physical_devices,
+            &self.audio.devices[PipeweaverDeviceType::Target],
+        )
+    }
+
+    pub fn get_attached_input_hardware_devices(&self, source_id: &str) -> Vec<HardwareDevice> {
+        self.get_attached_source_hardware_devices(
+            source_id,
+        )
+    }
+
+    fn get_attached_source_hardware_devices(
+        &self,
+        source_id: &str,
+    ) -> Vec<HardwareDevice> {
+        let Some(device) = self
             .devices_tree()
-            .targets
+            .sources
             .physical_devices
             .iter()
-            .find(|device| device.description.id.to_string() == target_id)
+            .find(|d| d.description.id.to_string() == source_id)
         else {
             return Vec::new();
         };
 
-        let available = &self.audio.devices[PipeweaverDeviceType::Target];
-        target
+        let available = &self.audio.devices[PipeweaverDeviceType::Source];
+        device
             .attached_devices
             .iter()
             .enumerate()
             .map(|(index, descriptor)| {
-                if let Some(device) =
+                if let Some(hw) =
                     Self::match_descriptor_to_hardware_device(descriptor, available)
                 {
-                    let mut converted = Self::convert_hardware_device(device);
+                    let mut converted = Self::convert_hardware_device(hw);
+                    converted.attachment_index = Some(index);
+                    converted
+                } else {
+                    HardwareDevice {
+                        node_id: None,
+                        name: descriptor.name.clone(),
+                        description: descriptor.description.clone(),
+                        attachment_index: Some(index),
+                    }
+                }
+            })
+            .collect()
+    }
+
+    fn get_attached_physical_hardware_devices_by_id(
+        &self,
+        device_id: &str,
+        physical_devices: &[pipeweaver_profile::PhysicalTargetDevice],
+        available: &[PipeweaverPhysicalDevice],
+    ) -> Vec<HardwareDevice> {
+        let Some(device) = physical_devices
+            .iter()
+            .find(|d| d.description.id.to_string() == device_id)
+        else {
+            return Vec::new();
+        };
+
+        device
+            .attached_devices
+            .iter()
+            .enumerate()
+            .map(|(index, descriptor)| {
+                if let Some(hw) =
+                    Self::match_descriptor_to_hardware_device(descriptor, available)
+                {
+                    let mut converted = Self::convert_hardware_device(hw);
                     converted.attachment_index = Some(index);
                     converted
                 } else {
@@ -332,6 +404,24 @@ impl Status {
         }
 
         devices
+    }
+
+    pub fn get_physical_sources(&self) -> Vec<Device> {
+        self.devices_tree()
+            .sources
+            .physical_devices
+            .iter()
+            .filter_map(|raw| Self::convert_physical_source(raw))
+            .collect()
+    }
+
+    pub fn get_physical_targets(&self) -> Vec<Device> {
+        self.devices_tree()
+            .targets
+            .physical_devices
+            .iter()
+            .filter_map(|raw| Self::convert_physical_target(raw))
+            .collect()
     }
 
     pub fn get_all_devices(&self) -> Vec<Device> {

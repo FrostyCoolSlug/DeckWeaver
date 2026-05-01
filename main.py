@@ -146,7 +146,7 @@ class DeckWeaver(PluginBase):
                 plugin_base=self,
                 action_base=ButtonAction,
                 action_id_suffix="Button",
-                action_name=self.lm.get("actions.button.name", "PipeWeaver Button"),
+                action_name=self.lm.get("actions.button.name", "PipeWeaver Volume"),
                 action_support={
                     Input.Key: ActionInputSupport.SUPPORTED,
                     Input.Dial: ActionInputSupport.UNSUPPORTED,
@@ -162,7 +162,24 @@ class DeckWeaver(PluginBase):
                 action_id_suffix="SourceSwitchButton",
                 action_name=self.lm.get(
                     "actions.source_switch_button.name",
-                    "PipeWeaver Output Device Switch Button",
+                    "PipeWeaver Output Device Switch",
+                ),
+                action_support={
+                    Input.Key: ActionInputSupport.SUPPORTED,
+                    Input.Dial: ActionInputSupport.UNSUPPORTED,
+                    Input.Touchscreen: ActionInputSupport.SUPPORTED,
+                },
+            )
+        )
+
+        self.add_action_holder(
+            ActionHolder(
+                plugin_base=self,
+                action_base=PhysicalSourceSwitchButtonAction,
+                action_id_suffix="PhysicalSourceSwitchButton",
+                action_name=self.lm.get(
+                    "actions.physical_source_switch_button.name",
+                    "PipeWeaver Input Device Switch",
                 ),
                 action_support={
                     Input.Key: ActionInputSupport.SUPPORTED,
@@ -948,13 +965,80 @@ class ButtonAction(BaseAction):
     VOLUME_STEP_SUBTITLE = "Positive = vol up, Negative = vol down, Zero = mute toggle"
 
     def get_config_rows(self):
-        # Base class already excludes meter settings for ButtonAction
         return super().get_config_rows()
 
     def _resolved_icon_path(self) -> Optional[str]:
         return super()._resolved_icon_path() or (
             DEFAULT_BUTTON_ICON_PATH if os.path.exists(DEFAULT_BUTTON_ICON_PATH) else None
         )
+
+    def _build_hardware_device_row(self, device, callback, selected_node_id: Optional[int]):
+        row = Adw.ActionRow()
+        row.set_title(device.description or device.name or f"Node {device.node_id}")
+        row.set_subtitle(device.name or "Physical device")
+        row.device_data = device
+        row.set_activatable(True)
+        row.connect("activated", callback)
+        if device.node_id is not None and device.node_id == selected_node_id:
+            row.add_css_class("selected")
+        return row
+
+    def _populate_hardware_device_list(
+        self,
+        container: Gtk.Box,
+        devices: list,
+        callback,
+        selected_node_id: Optional[int],
+        empty_locale_key: str,
+        empty_subtitle: str,
+    ):
+        self._clear_box_children(container)
+        if not devices:
+            row = Adw.ActionRow()
+            row.set_title(
+                self.plugin_base.lm.get(empty_locale_key, "No physical devices found")
+            )
+            row.set_subtitle(empty_subtitle)
+            row.set_sensitive(False)
+            container.append(row)
+            return
+
+        group = Adw.PreferencesGroup()
+        group.set_margin_top(12)
+        group.set_margin_bottom(6)
+        for device in devices:
+            row = self._build_hardware_device_row(device, callback, selected_node_id)
+            group.add(row)
+        container.append(group)
+
+    def _populate_device_list(
+        self,
+        container: Gtk.Box,
+        devices: list,
+        callback,
+        empty_locale_key: str,
+        empty_subtitle: str,
+    ):
+        self._clear_box_children(container)
+        if not devices:
+            row = Adw.ActionRow()
+            row.set_title(
+                self.plugin_base.lm.get(empty_locale_key, "No devices found")
+            )
+            row.set_subtitle(empty_subtitle)
+            row.set_sensitive(False)
+            container.append(row)
+            return
+
+        group = Adw.PreferencesGroup()
+        group.set_margin_top(12)
+        group.set_margin_bottom(6)
+        for device in devices:
+            row = self._build_device_row(device, callback)
+            if device.id == self._device_id:
+                row.add_css_class("selected")
+            group.add(row)
+        container.append(group)
 
     def event_callback(self, event: Any, data: Any):
         if event == Input.Key.Events.SHORT_UP and self._device_id:
@@ -983,12 +1067,9 @@ class SourceSwitchButtonAction(ButtonAction):
         self._hardware_device_name = settings.get("hardware_device_name")
 
         if self._hardware_device_node_id is not None and not self._hardware_device_name:
-            for device in self._core.get_output_hardware_devices():
-                if device.node_id == self._hardware_device_node_id:
-                    self._hardware_device_name = (
-                        device.name or device.description or str(device.node_id)
-                    )
-                    break
+            self._hardware_device_name = self._core.get_hardware_device_name(
+                self._hardware_device_node_id, False
+            )
 
     def get_config_rows(self):
         lm = self.plugin_base.lm
@@ -1089,61 +1170,23 @@ class SourceSwitchButtonAction(ButtonAction):
         return config
 
     def _populate_output_device_list(self):
-        self._clear_box_children(self.output_device_container)
-        targets = [device for device in self._core.get_targets() if device.is_physical]
-
-        if not targets:
-            row = Adw.ActionRow()
-            row.set_title(
-                self.plugin_base.lm.get(
-                    "ui.output_device.empty", "No hardware outputs found"
-                )
-            )
-            row.set_subtitle("Check that PipeWeaver has detected your output device")
-            row.set_sensitive(False)
-            self.output_device_container.append(row)
-            return
-
-        group = Adw.PreferencesGroup()
-        group.set_margin_top(12)
-        group.set_margin_bottom(6)
-        for device in targets:
-            row = self._build_device_row(device, self._on_output_row_activated)
-            if device.id == self._device_id:
-                row.add_css_class("selected")
-            group.add(row)
-        self.output_device_container.append(group)
+        self._populate_device_list(
+            self.output_device_container,
+            self._core.get_physical_targets(),
+            self._on_output_row_activated,
+            "ui.output_device.empty",
+            "Check that PipeWeaver has detected your output device",
+        )
 
     def _populate_source_device_list(self):
-        self._clear_box_children(self.source_device_container)
-        sources = self._core.get_output_hardware_devices()
-
-        if not sources:
-            row = Adw.ActionRow()
-            row.set_title(
-                self.plugin_base.lm.get(
-                    "ui.physical_device.empty", "No physical devices found"
-                )
-            )
-            row.set_subtitle("Check that PipeWeaver has detected your hardware outputs")
-            row.set_sensitive(False)
-            self.source_device_container.append(row)
-            return
-
-        group = Adw.PreferencesGroup()
-        group.set_margin_top(12)
-        group.set_margin_bottom(6)
-        for device in sources:
-            row = Adw.ActionRow()
-            row.set_title(device.name or device.description or f"Node {device.node_id}")
-            row.set_subtitle(device.description or "Physical output device")
-            row.device_data = device
-            row.set_activatable(True)
-            row.connect("activated", self._on_source_row_activated)
-            if device.node_id == self._hardware_device_node_id:
-                row.add_css_class("selected")
-            group.add(row)
-        self.source_device_container.append(group)
+        self._populate_hardware_device_list(
+            self.source_device_container,
+            self._core.get_output_hardware_devices(),
+            self._on_source_row_activated,
+            self._hardware_device_node_id,
+            "ui.physical_device.empty",
+            "Check that PipeWeaver has detected your hardware outputs",
+        )
 
     def _on_output_row_activated(self, row: Adw.ActionRow):
         device = row.device_data
@@ -1200,6 +1243,202 @@ class SourceSwitchButtonAction(ButtonAction):
             return
 
         self._core.switch_output_hardware_device(
+            self._device_id, self._hardware_device_node_id
+        )
+
+
+class PhysicalSourceSwitchButtonAction(ButtonAction):
+    """Button that switches a hardware input source to a selected physical device."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._hardware_device_node_id: Optional[int] = None
+        self._hardware_device_name: Optional[str] = None
+
+    def _load_settings(self):
+        super()._load_settings()
+        settings = self.get_settings()
+        node_id = settings.get("hardware_device_node_id")
+        self._hardware_device_node_id = int(node_id) if node_id is not None else None
+        self._hardware_device_name = settings.get("hardware_device_name")
+
+        if self._hardware_device_node_id is not None and not self._hardware_device_name:
+            self._hardware_device_name = self._core.get_hardware_device_name(
+                self._hardware_device_node_id, True
+            )
+
+    def get_config_rows(self):
+        lm = self.plugin_base.lm
+        self._load_settings()
+        self.output_expander = None
+        self.source_expander = None
+
+        if not self._core.is_available():
+            error_row = Adw.ActionRow()
+            error_row.set_title(lm.get("ui.error.not_running.title"))
+            error_row.set_subtitle(lm.get("ui.error.not_running.subtitle"))
+            error_row.add_css_class("warning")
+            return [error_row]
+
+        self.output_expander = Adw.ExpanderRow()
+        self.output_expander.set_title(
+            lm.get("ui.input_device.title", "Hardware Input Device")
+        )
+        self.output_expander.set_subtitle(
+            self._device_name
+            or lm.get("ui.input_device.none", "No hardware input selected")
+        )
+
+        self.output_device_container = Gtk.Box(
+            orientation=Gtk.Orientation.VERTICAL,
+            spacing=0,
+        )
+        self.output_device_container.set_margin_start(30)
+        self.output_device_container.set_margin_end(30)
+        self.output_device_container.set_margin_bottom(12)
+
+        output_scrolled = Gtk.ScrolledWindow()
+        output_scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        output_scrolled.set_min_content_height(220)
+        output_scrolled.set_child(self.output_device_container)
+
+        self.output_expander.add_row(output_scrolled)
+        self.output_expander.connect(
+            "notify::expanded", self._on_output_expander_expanded
+        )
+        self._populate_output_device_list()
+
+        output_refresh = Gtk.Button(
+            icon_name="view-refresh-symbolic",
+            valign=Gtk.Align.CENTER,
+            tooltip_text=lm.get("ui.refresh_devices.button"),
+        )
+        output_refresh.connect("clicked", self._on_output_refresh_clicked)
+        self.output_expander.add_suffix(output_refresh)
+
+        self.source_expander = Adw.ExpanderRow()
+        self.source_expander.set_title(
+            lm.get("ui.physical_input_device.title", "Physical Input Device")
+        )
+        self.source_expander.set_subtitle(
+            self._hardware_device_name
+            or lm.get("ui.physical_input_device.none", "No physical device selected")
+        )
+
+        self.source_device_container = Gtk.Box(
+            orientation=Gtk.Orientation.VERTICAL,
+            spacing=0,
+        )
+        self.source_device_container.set_margin_start(30)
+        self.source_device_container.set_margin_end(30)
+        self.source_device_container.set_margin_bottom(12)
+
+        source_scrolled = Gtk.ScrolledWindow()
+        source_scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        source_scrolled.set_min_content_height(260)
+        source_scrolled.set_child(self.source_device_container)
+
+        self.source_expander.add_row(source_scrolled)
+        self.source_expander.connect(
+            "notify::expanded", self._on_source_expander_expanded
+        )
+        self._populate_source_device_list()
+
+        source_refresh = Gtk.Button(
+            icon_name="view-refresh-symbolic",
+            valign=Gtk.Align.CENTER,
+            tooltip_text=lm.get("ui.refresh_devices.button"),
+        )
+        source_refresh.connect("clicked", self._on_source_refresh_clicked)
+        self.source_expander.add_suffix(source_refresh)
+
+        icon_row = self._build_icon_row()
+
+        return [
+            self.output_expander,
+            self.source_expander,
+            icon_row,
+        ]
+
+    def _build_config(self) -> ActionConfig:
+        config = super()._build_config()
+        config.button_overlay = False
+        return config
+
+    def _populate_output_device_list(self):
+        self._populate_device_list(
+            self.output_device_container,
+            self._core.get_physical_sources(),
+            self._on_output_row_activated,
+            "ui.input_device.empty",
+            "Check that PipeWeaver has detected your input device",
+        )
+
+    def _populate_source_device_list(self):
+        self._populate_hardware_device_list(
+            self.source_device_container,
+            self._core.get_input_hardware_devices(),
+            self._on_source_row_activated,
+            self._hardware_device_node_id,
+            "ui.physical_input_device.empty",
+            "Check that PipeWeaver has detected your hardware inputs",
+        )
+
+    def _on_output_row_activated(self, row: Adw.ActionRow):
+        device = row.device_data
+        if not device:
+            return
+
+        self._set_selected_device(device)
+
+        if self.output_expander is not None:
+            self.output_expander.set_subtitle(device.name)
+
+        self._update_config()
+
+    def _on_source_row_activated(self, row: Adw.ActionRow):
+        device = row.device_data
+        if not device:
+            return
+
+        self._hardware_device_node_id = device.node_id
+        self._hardware_device_name = device.name or device.description or (
+            str(device.node_id) if device.node_id is not None else None
+        )
+        self._persist_settings(
+            hardware_device_node_id=self._hardware_device_node_id,
+            hardware_device_name=self._hardware_device_name,
+        )
+
+        if self.source_expander is not None:
+            self.source_expander.set_subtitle(
+                self._hardware_device_name
+                or self.plugin_base.lm.get(
+                    "ui.physical_input_device.none", "No physical device selected"
+                )
+            )
+
+    def _on_output_expander_expanded(self, expander: Adw.ExpanderRow, _):
+        if expander.get_expanded():
+            self._populate_output_device_list()
+
+    def _on_source_expander_expanded(self, expander: Adw.ExpanderRow, _):
+        if expander.get_expanded():
+            self._populate_source_device_list()
+
+    def _on_output_refresh_clicked(self, button: Gtk.Button):
+        self._populate_output_device_list()
+
+    def _on_source_refresh_clicked(self, button: Gtk.Button):
+        self._populate_source_device_list()
+
+    def event_callback(self, event: Any, data: Any):
+        if event != Input.Key.Events.SHORT_UP:
+            return
+        if not self._device_id or self._hardware_device_node_id is None:
+            return
+
+        self._core.switch_input_hardware_device(
             self._device_id, self._hardware_device_node_id
         )
 
