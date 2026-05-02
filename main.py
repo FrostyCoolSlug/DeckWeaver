@@ -1057,19 +1057,24 @@ class SourceSwitchButtonAction(ButtonAction):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._hardware_device_node_id: Optional[int] = None
+        self._hardware_device_description: Optional[str] = None
         self._hardware_device_name: Optional[str] = None
 
     def _load_settings(self):
         super()._load_settings()
         settings = self.get_settings()
-        node_id = settings.get("hardware_device_node_id")
-        self._hardware_device_node_id = int(node_id) if node_id is not None else None
+        self._hardware_device_description = settings.get("hardware_device_description")
         self._hardware_device_name = settings.get("hardware_device_name")
 
-        if self._hardware_device_node_id is not None and not self._hardware_device_name:
-            self._hardware_device_name = self._core.get_hardware_device_name(
-                self._hardware_device_node_id, False
-            )
+        # Resolve node_id from the stored description (which is stable across reboots)
+        if self._hardware_device_description is not None and self._hardware_device_node_id is None:
+            for device in self._core.get_output_hardware_devices():
+                if device.description == self._hardware_device_description:
+                    self._hardware_device_node_id = device.node_id
+                    # Back-fill name if missing
+                    if not self._hardware_device_name and device.name:
+                        self._hardware_device_name = device.name
+                    break
 
     def get_config_rows(self):
         lm = self.plugin_base.lm
@@ -1206,10 +1211,12 @@ class SourceSwitchButtonAction(ButtonAction):
             return
 
         self._hardware_device_node_id = device.node_id
+        self._hardware_device_description = device.description
         self._hardware_device_name = device.name or device.description or (
             str(device.node_id) if device.node_id is not None else None
         )
         self._persist_settings(
+            hardware_device_description=self._hardware_device_description,
             hardware_device_node_id=self._hardware_device_node_id,
             hardware_device_name=self._hardware_device_name,
         )
@@ -1253,19 +1260,23 @@ class PhysicalSourceSwitchButtonAction(ButtonAction):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._hardware_device_node_id: Optional[int] = None
+        self._hardware_device_description: Optional[str] = None
         self._hardware_device_name: Optional[str] = None
 
     def _load_settings(self):
         super()._load_settings()
         settings = self.get_settings()
-        node_id = settings.get("hardware_device_node_id")
-        self._hardware_device_node_id = int(node_id) if node_id is not None else None
+        self._hardware_device_description = settings.get("hardware_device_description")
         self._hardware_device_name = settings.get("hardware_device_name")
 
-        if self._hardware_device_node_id is not None and not self._hardware_device_name:
-            self._hardware_device_name = self._core.get_hardware_device_name(
-                self._hardware_device_node_id, True
-            )
+        # Resolve node_id from the stored description (stable across reboots)
+        if self._hardware_device_description is not None and self._hardware_device_node_id is None:
+            for device in self._core.get_input_hardware_devices():
+                if device.description == self._hardware_device_description:
+                    self._hardware_device_node_id = device.node_id
+                    if not self._hardware_device_name and device.name:
+                        self._hardware_device_name = device.name
+                    break
 
     def get_config_rows(self):
         lm = self.plugin_base.lm
@@ -1402,10 +1413,12 @@ class PhysicalSourceSwitchButtonAction(ButtonAction):
             return
 
         self._hardware_device_node_id = device.node_id
+        self._hardware_device_description = device.description
         self._hardware_device_name = device.name or device.description or (
             str(device.node_id) if device.node_id is not None else None
         )
         self._persist_settings(
+            hardware_device_description=self._hardware_device_description,
             hardware_device_node_id=self._hardware_device_node_id,
             hardware_device_name=self._hardware_device_name,
         )
