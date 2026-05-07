@@ -869,6 +869,10 @@ impl DeckWeaverCore {
                                 cached_icon.as_ref(),
                                 cached_knob_base.as_ref(),
                             )
+                        } else if config.device_id.is_some()
+                            && status.read().is_some()
+                        {
+                            renderers.render_unavailable(&config)
                         } else {
                             renderers.render_loading(&config)
                         };

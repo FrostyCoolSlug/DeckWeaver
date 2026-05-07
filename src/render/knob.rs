@@ -218,9 +218,9 @@ impl KnobRenderer {
 
         draw_right_text(
             &mut pixmap,
-            if params.mix_b_active { "MB" } else { "MA" },
+            if params.mix_b_active { "Mix B" } else { "Mix A" },
             Rect::new(MIX_LABEL_X, MIX_LABEL_Y, MIX_LABEL_W, MIX_LABEL_H, 0.0),
-            12.5,
+            14.0,
             if params.mix_b_active { COLOR_MIX_B } else { COLOR_MIX_A },
         );
 
@@ -228,12 +228,12 @@ impl KnobRenderer {
         if params.mute_profile_muted {
             mute_rect.draw_filled(&mut pixmap, COLOR_RED);
         }
-        let mute_text = format!("M{}", params.mute_profile + 1);
+        let mute_text = format!("Mute {}", params.mute_profile + 1);
         draw_right_text(
             &mut pixmap,
             &mute_text,
             Rect::new(MUTE_LABEL_X, MUTE_LABEL_Y, MUTE_LABEL_W, MUTE_LABEL_H, 0.0),
-            12.5,
+            14.0,
             if params.mute_profile_muted {
                 COLOR_WHITE
             } else {
@@ -244,9 +244,9 @@ impl KnobRenderer {
         if params.is_source && params.source_volumes_linked {
             draw_right_text(
                 &mut pixmap,
-                "LINKED",
+                "Linked",
                 Rect::new(LINK_LABEL_X, LINK_LABEL_Y, LINK_LABEL_W, LINK_LABEL_H, 0.0),
-                11.0,
+                14.0,
                 Rgba::rgb(238, 238, 238),
             );
         }
